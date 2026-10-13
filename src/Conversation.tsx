@@ -35,11 +35,11 @@ export function Conversation({ messages, canSend, onSend, otherName }: {
   return (
     <div className="flex flex-col gap-3">
       {messages.length > 0 ? (
-        <ol ref={listRef} className="flex max-h-96 flex-col gap-2 overflow-y-auto" aria-label={`Messages with ${otherName}`}>
+        <ol ref={listRef} className="flex max-h-[28rem] flex-col gap-2 overflow-y-auto rounded-2xl bg-sunken p-3" aria-label={`Messages with ${otherName}`}>
           {messages.map((m) => <Bubble key={(m.mine ? "me" : "them") + m.id} m={m} />)}
         </ol>
       ) : (
-        <p className="text-sm text-muted">Text and links you send appear here, ready to copy on the other device.</p>
+        <p className="rounded-2xl bg-sunken px-4 py-6 text-center text-sm text-muted">Text and links you send appear here, ready to copy on the other device.</p>
       )}
       <div className="flex flex-col gap-2">
         <label htmlFor="draft" className="sr-only">Text or link to send</label>
@@ -50,10 +50,10 @@ export function Conversation({ messages, canSend, onSend, otherName }: {
           onKeyDown={onKey}
           rows={3}
           placeholder="Type or paste text or a link"
-          className="w-full min-w-0 resize-y rounded-xl border border-line bg-surface px-3 py-2 text-ink placeholder:text-muted"
+          className="w-full min-w-0 resize-y rounded-2xl bg-sunken px-4 py-3 text-ink placeholder:text-muted focus:bg-surface focus:ring-2 focus:ring-accent/30 focus:outline-none"
         />
         <div className="flex flex-wrap items-center gap-2">
-          <Button kind="primary" onClick={send} disabled={!canSend || !draft.trim()}>Send text</Button>
+          <Button kind="primary" icon="send" onClick={send} disabled={!canSend || !draft.trim()}>Send text</Button>
           <span className="hidden text-xs text-muted sm:inline">Ctrl + Enter sends</span>
         </div>
         {problem && <Note tone="bad">{problem}</Note>}
@@ -79,9 +79,9 @@ function Bubble({ m }: { m: ChatMsg }) {
     <li className={`flex max-w-[90%] flex-col gap-1 ${m.mine ? "self-end items-end" : "self-start items-start"}`}>
       <div
         id={"msg-" + m.id}
-        className={`whitespace-pre-wrap break-words rounded-2xl px-3 py-2 [overflow-wrap:anywhere] ${m.mine ? "bg-accent-soft" : "border border-line bg-surface"}`}
+        className={`whitespace-pre-wrap break-words px-3.5 py-2.5 [overflow-wrap:anywhere] ${m.mine ? "rounded-2xl rounded-br-md bg-accent text-on-accent" : "rounded-2xl rounded-bl-md bg-surface text-ink shadow-[var(--shadow-card)]"}`}
       >
-        <Linked text={m.body} />
+        <Linked text={m.body} mine={m.mine} />
       </div>
       <div className="flex items-center gap-2 text-xs text-muted">
         <span>{new Date(m.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
@@ -97,13 +97,13 @@ function Bubble({ m }: { m: ChatMsg }) {
 // Only http and https addresses become links; everything else stays plain text.
 const URL_RE = /(https?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]])/gi;
 
-function Linked({ text }: { text: string }) {
+function Linked({ text, mine }: { text: string; mine: boolean }) {
   const parts = text.split(URL_RE);
   return (
     <>
       {parts.map((p, i) =>
         i % 2 === 1 ? (
-          <a key={i} href={p} target="_blank" rel="noopener noreferrer" className="text-accent underline">{p}</a>
+          <a key={i} href={p} target="_blank" rel="noopener noreferrer" className={`underline ${mine ? "text-on-accent" : "text-accent"}`}>{p}</a>
         ) : (
           p
         ),

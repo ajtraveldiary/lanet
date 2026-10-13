@@ -1,39 +1,64 @@
 @import "tailwindcss";
+@import "@fontsource-variable/plus-jakarta-sans";
 
 @theme {
-  --color-bg: #f5f6f8;
+  --color-bg: #f4f5fb;
   --color-surface: #ffffff;
-  --color-ink: #151a21;
-  --color-muted: #586170;
-  --color-line: #dce0e6;
-  --color-accent: #0f766e;
+  --color-sunken: #f6f7fb;
+  --color-ink: #1b1a2e;
+  --color-muted: #6f7489;
+  --color-line: #eaecf3;
+  /* Violet: the main actions. Teal: anything arriving on this device. */
+  --color-accent: #5b3df5;
   --color-on-accent: #ffffff;
-  --color-accent-soft: #e3f3f1;
-  --color-bad: #b42318;
-  --color-bad-soft: #fdeceb;
-  --color-warn-soft: #fff6e0;
+  --color-accent-soft: #eeebff;
+  --color-teal: #14a8a0;
+  --color-on-teal: #ffffff;
+  --color-teal-soft: #e2f7f5;
+  --color-bad: #c42a2a;
+  --color-bad-soft: #fdecec;
+  --color-warn-soft: #fff5dc;
   --color-on-warn: #6b4a00;
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-sans: "Plus Jakarta Sans Variable", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, "SF Mono", Consolas, monospace;
+  --shadow-card: 0 1px 2px rgb(27 26 46 / 0.04), 0 8px 24px rgb(27 26 46 / 0.05);
+  --shadow-float: 0 10px 30px rgb(40 30 120 / 0.16);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-bg: #0f1215;
-    --color-surface: #171b20;
-    --color-ink: #e7eaee;
-    --color-muted: #9ba4b0;
-    --color-line: #2b3139;
-    --color-accent: #2dd4bf;
-    --color-on-accent: #04241f;
-    --color-accent-soft: #0f2f2b;
+    --color-bg: #0d0e16;
+    --color-surface: #171826;
+    --color-sunken: #12131e;
+    --color-ink: #ecebf5;
+    --color-muted: #9a9db2;
+    --color-line: #282a3b;
+    --color-accent: #8b7bff;
+    --color-on-accent: #120d33;
+    --color-accent-soft: #231f45;
+    --color-teal: #3dd6cc;
+    --color-on-teal: #052522;
+    --color-teal-soft: #0f2f2d;
     --color-bad: #ff8a80;
     --color-bad-soft: #3a1714;
     --color-warn-soft: #33290f;
     --color-on-warn: #f5d58a;
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.3);
+    --shadow-float: 0 10px 30px rgb(0 0 0 / 0.5);
   }
 }
 
 html { background: var(--color-bg); color: var(--color-ink); }
-body { margin: 0; min-height: 100dvh; font-family: var(--font-sans); -webkit-tap-highlight-color: transparent; }
+body {
+  margin: 0;
+  min-height: 100dvh;
+  font-family: var(--font-sans);
+  -webkit-tap-highlight-color: transparent;
+  /* A soft wash of mint and lavender behind the cards. */
+  background:
+    radial-gradient(60rem 40rem at 0% 0%, rgb(20 168 160 / 0.10), transparent 60%),
+    radial-gradient(60rem 40rem at 100% 10%, rgb(91 61 245 / 0.10), transparent 60%),
+    var(--color-bg);
+  background-attachment: fixed;
+}
 :focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }

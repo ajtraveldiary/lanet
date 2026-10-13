@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Shell, Card, Button } from "./ui";
+import { Shell, Card, Button, IconTile } from "./ui";
 import { HostPage } from "./host/HostPage";
 import { GuestPage } from "./guest/GuestPage";
 import { ROOM_ID } from "./lib/room";
@@ -16,10 +16,16 @@ export default function App() {
   return (
     <Shell>
       {!hash ? <HostPage /> : ROOM_ID.test(hash) ? <GuestPage key={hash} roomId={hash} /> : (
-        <Card title="This link isn't complete">
-          <p className="mb-4 text-muted">Part of the room link is missing. Open the whole link again, or scan the QR code on the main device.</p>
-          <Button onClick={() => { location.hash = ""; }}>Go to the start page</Button>
-        </Card>
+        <div className="mx-auto w-full max-w-md pt-2 sm:pt-10">
+          <Card>
+            <div className="flex flex-col items-start gap-3">
+              <IconTile name="link" tone="bg-warn-soft text-on-warn" size="size-12" />
+              <h1 className="text-xl font-bold">This link isn't complete</h1>
+              <p className="text-muted">Part of the room link is missing. Open the whole link again, or scan the QR code on the main device.</p>
+              <Button icon="arrow" onClick={() => { location.hash = ""; }}>Go to the start page</Button>
+            </div>
+          </Card>
+        </div>
       )}
     </Shell>
   );
