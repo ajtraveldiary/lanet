@@ -2,6 +2,8 @@
 
 Send files, folders and text between devices on the same Wi-Fi, straight from the browser. Nothing to install.
 
+**Use it:** https://lanet.workdesk.workers.dev/
+
 1. On the main device, open Lanet and tap **Start sharing**. It shows a QR code, a link and a 6-digit PIN.
 2. On another device on the same Wi-Fi, scan the QR code (or open the link) and type the PIN.
 3. Send files or text either way. The other side taps **Accept**, and the files go straight from one device to the other.
@@ -99,6 +101,7 @@ The app is then live at `https://lanet.<your-subdomain>.workers.dev`.
 
 ## Security notes
 
+- The site sends strict security headers (`public/_headers`): it loads nothing from any other address, runs no inline scripts, can't be shown inside another site's frame, and sends no referrer.
 - Never commit secrets. `.env` files, `.dev.vars`, keys and certificates are git-ignored. Cloudflare secrets are set with `npx wrangler secret put NAME`.
 - File names from other devices are cleaned before saving, and existing files are never overwritten.
 - Text from other devices is shown as plain text; only `http` and `https` links are clickable.
