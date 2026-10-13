@@ -80,6 +80,7 @@ async function folder(): Promise<FileSystemDirectoryHandle> {
 export async function openSink(kind: SinkKind, total: number): Promise<Sink> {
   if (kind === "folder") {
     const dir = await folder();
+    await clearUnfinished();
     const tops = new Map<string, string>();
     return { kind, where: dir.name ? `the “${dir.name}” folder` : "the folder you picked", open: (path) => folderWriter(dir, path, tops) };
   }
@@ -118,12 +119,58 @@ async function folderWriter(root: FileSystemDirectoryHandle, path: string, tops:
   const fh = await dir.getFileHandle(name, { create: true });
   const w = await fh.createWritable();
   const shown = [...(parts.length ? [tops.get(parts[0])!, ...parts.slice(1)] : []), name].join("/");
+  const mark = unfinished(dir, name);
   return {
     write: (b) => w.write(b),
-    close: async () => { await w.close(); return { kind: "folder", name: shown }; },
+    close: async () => { await w.close(); await mark.done(); return { kind: "folder", name: shown }; },
     // The browser writes to a hidden temporary file until close, so only the empty name needs removing.
-    abort: async () => { await w.abort().catch(() => {}); await dir.removeEntry(name).catch(() => {}); },
+    abort: async () => { await w.abort().catch(() => {}); await dir.removeEntry(name).catch(() => {}); await mark.done(); },
   };
+}
+
+// While a file is being written into the person's folder, the folder only holds an empty file of
+// that name (the data waits in a hidden temporary file). If the page is closed mid-file, the browser
+// drops the data but leaves the empty name; these are remembered and removed the next time files
+// are accepted, if they are still empty.
+type Unfinished = { id: string; dir: FileSystemDirectoryHandle; name: string };
+const UNFINISHED = "unfinished";
+const writingNow = new Set<string>();
+let listLock: Promise<unknown> = Promise.resolve();
+
+function editList(fn: (list: Unfinished[]) => Unfinished[]) {
+  const next = listLock.then(async () => kvSet(UNFINISHED, fn((await kvGet<Unfinished[]>(UNFINISHED)) ?? [])));
+  listLock = next.catch(() => {});
+  return next;
+}
+
+function unfinished(dir: FileSystemDirectoryHandle, name: string) {
+  const id = randomKey();
+  writingNow.add(id);
+  const added = editList((list) => [...list, { id, dir, name }]);
+  return {
+    async done() {
+      writingNow.delete(id);
+      await added.catch(() => {});
+      await editList((list) => list.filter((u) => u.id !== id)).catch(() => {});
+    },
+  };
+}
+
+async function clearUnfinished() {
+  await listLock;
+  const list = (await kvGet<Unfinished[]>(UNFINISHED)) ?? [];
+  const handled: string[] = [];
+  for (const u of list) {
+    if (writingNow.has(u.id)) continue;  // still being written by this page
+    try {
+      // Without permission for that folder now, try again another time.
+      if ((await u.dir.queryPermission?.({ mode: "readwrite" })) !== "granted") continue;
+      const f = await (await u.dir.getFileHandle(u.name)).getFile();
+      if (f.size === 0) await u.dir.removeEntry(u.name);
+    } catch { /* already gone */ }
+    handled.push(u.id);
+  }
+  if (handled.length) await editList((now) => now.filter((u) => !handled.includes(u.id))).catch(() => {});
 }
 
 // A file or a folder of that name is already there.
@@ -150,8 +197,11 @@ function downloadWriter(name: string, size: number): Promise<FileWriter> {
     wake?.();
   };
   sw.postMessage({ type: "download", id, name, size }, [port2]);
+  // While a transfer is paused no data flows; a nudge now and then keeps the browser from
+  // stopping the idle service worker and with it the download.
+  const keepAlive = setInterval(() => sw.postMessage({ type: "ping" }), 10_000);
   let frame: HTMLIFrameElement | null = null;
-  const done = () => setTimeout(() => frame?.remove(), 60_000);
+  const done = () => { clearInterval(keepAlive); setTimeout(() => frame?.remove(), 60_000); };
   return isReady.then(() => {
     // Loading the address in a hidden frame starts the download without leaving the page.
     frame = document.createElement("iframe");

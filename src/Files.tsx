@@ -115,6 +115,7 @@ function title(b: Batch, other: string): string {
     switch (b.state) {
       case "asking": return `Waiting for ${other} to accept`;
       case "active": return `Sending to ${other}`;
+      case "paused": return `Paused: waiting for ${other}`;
       case "done": return "Sent";
       case "declined": return `${other} declined`;
       case "cancelled": return "Cancelled";
@@ -122,8 +123,9 @@ function title(b: Batch, other: string): string {
     }
   }
   switch (b.state) {
-    case "incoming": return `${other} wants to send you`;
+    case "incoming": return b.continues ? `${other} wants to carry on sending` : `${other} wants to send you`;
     case "active": return "Receiving";
+    case "paused": return `Paused: waiting for ${other}`;
     case "done": return "Received";
     case "declined": return "You declined";
     case "cancelled": return "Cancelled";
@@ -206,15 +208,27 @@ function BatchView({ b, transfers, otherName }: { b: Batch; transfers: Transfers
         </button>
       )}
 
-      {b.state === "active" && (
+      {(b.state === "active" || b.state === "paused") && (
         <div className="mt-3">
           <progress className="h-2 w-full accent-[var(--color-accent)]" max={100} value={pct} aria-label="Progress" />
           <p className="mt-1 text-sm text-muted">
             {pct}% · {formatSize(b.done)} of {formatSize(b.total)}
-            {b.speed > 0 && <> · {formatSize(b.speed)}/s</>}
-            {left && <> · {left} left</>}
+            {b.state === "active" && b.speed > 0 && <> · {formatSize(b.speed)}/s</>}
+            {b.state === "active" && left && <> · {left} left</>}
           </p>
         </div>
+      )}
+      {b.state === "paused" && (
+        <div className="mt-2">
+          <Note tone="warn">
+            {b.orphan
+              ? `${otherName} no longer has this transfer (its page may have been reloaded). Pick the same files there and send them again: they carry on from here instead of starting over.`
+              : "The connection dropped. This carries on by itself when both devices are back. Keep this page open."}
+          </Note>
+        </div>
+      )}
+      {b.state === "incoming" && b.continues && (
+        <p className="mt-2 text-sm text-muted">These are the files that stopped earlier. Accept to carry on: {formatSize(b.done)} of {formatSize(b.total)} is already here.</p>
       )}
 
       {b.error && b.state === "failed" && <div className="mt-2"><Note tone="bad">{b.error}</Note></div>}
@@ -236,7 +250,7 @@ function BatchView({ b, transfers, otherName }: { b: Batch; transfers: Transfers
             <Button onClick={() => transfers.decline(b.id)}>Decline</Button>
           </>
         )}
-        {(b.state === "asking" || b.state === "active") && <Button onClick={() => transfers.cancel(b.id)}>Cancel</Button>}
+        {(b.state === "asking" || b.state === "active" || b.state === "paused") && <Button onClick={() => transfers.cancel(b.id)}>Cancel</Button>}
         {!b.out && b.state === "done" && zipFile && <Button kind="primary" onClick={saveAll}>Save the .zip</Button>}
         {!b.out && b.state === "done" && !zipFile && kept.length > 1 && <Button onClick={saveAll}>Save all</Button>}
       </div>

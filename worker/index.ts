@@ -50,7 +50,10 @@ export default {
 type Who =
   | { role: "new" }
   | { role: "host"; name: string }
-  | { role: "guest"; id: string; name: string; state: "knocking" | "in" };
+  | { role: "guest"; id: string; name: string; key: string; state: "knocking" | "in" };
+
+// A device's own random key, so the main device knows it again when it rejoins (a new id every time).
+const cleanKey = (v: unknown) => (typeof v === "string" && /^[A-Za-z0-9_-]{8,64}$/.test(v) ? v : "");
 
 // One room per main device. It introduces devices and passes their connection setup messages;
 // files never come here. The main device checks the PIN, so the room never keeps it.
@@ -119,7 +122,7 @@ export class Room extends DurableObject<Env> {
     const guests = this.guests();
     ws.send(JSON.stringify({
       type: "welcome",
-      guests: guests.filter((g) => g.who.state === "in").map((g) => ({ id: g.who.id, name: g.who.name })),
+      guests: guests.filter((g) => g.who.state === "in").map((g) => ({ id: g.who.id, name: g.who.name, key: g.who.key })),
       locked: ((await this.ctx.storage.get<number>("wrong")) ?? 0) >= TRIES_PER_ROOM,
     }));
     // Devices that were waiting send their PIN again on this.
@@ -137,9 +140,9 @@ export class Room extends DurableObject<Env> {
     const host = this.host();
     if (!host) return ws.send(JSON.stringify({ type: "hostAway" }));
     // The PIN is passed straight on to the main device, which checks it; it is never kept here.
-    const who = { role: "guest", id: randomId(6), name: cleanName(msg.name), state: "knocking" } satisfies Who;
+    const who = { role: "guest", id: randomId(6), name: cleanName(msg.name), key: cleanKey(msg.key), state: "knocking" } satisfies Who;
     ws.serializeAttachment(who);
-    host.ws.send(JSON.stringify({ type: "knock", from: who.id, name: who.name, pin }));
+    host.ws.send(JSON.stringify({ type: "knock", from: who.id, name: who.name, key: who.key, pin }));
   }
 
   private async admit(id: string, ok: boolean) {

@@ -3,14 +3,15 @@ import { closeMessage, readSession, retryDelay, roomSocket, writeSession } from 
 import { deviceName } from "../lib/device";
 import { PeerLink, type LinkState, type Signal } from "../lib/peer";
 import { applyChat, newText, readChat, type ChatMsg } from "../lib/chat";
+import { randomKey } from "../lib/peer";
 import { Transfers } from "../lib/transfers";
 
 export type GuestPhase = "pin" | "checking" | "waiting" | "in" | "ended";
 
-// The PIN that worked, and the room's pass for this device, are kept for this tab,
-// so a reload or a dropped Wi-Fi joins again without asking.
+// The PIN that worked, the room's pass for this device, and the device's own key are kept for this tab,
+// so a reload or a dropped Wi-Fi joins again without asking, and the main device knows it's the same device.
 const keyFor = (id: string) => "lanet.join." + id;
-type Saved = { pin: string; pass: string };
+type Saved = { pin?: string; pass?: string; key?: string };
 
 // A direct connection that drops is set up again after this long, if it hasn't come back by itself.
 const RESTART_AFTER = 5000;
@@ -19,6 +20,7 @@ export function useGuestRoom(roomId: string) {
   const saved = readSession<Saved>(keyFor(roomId));
   const pinRef = useRef<string | null>(typeof saved?.pin === "string" ? saved.pin : null);
   const passRef = useRef<string | null>(typeof saved?.pass === "string" ? saved.pass : null);
+  const deviceKey = useRef(typeof saved?.key === "string" && saved.key ? saved.key : randomKey());
   const [phase, setPhaseState] = useState<GuestPhase>(pinRef.current ? "checking" : "pin");
   // Socket and connection handlers outlive renders, so they read these from refs.
   const phaseRef = useRef(phase);
@@ -50,7 +52,7 @@ export function useGuestRoom(roomId: string) {
   const join = useCallback(() => {
     const ws = wsRef.current;
     if (pinRef.current && ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "join", pin: pinRef.current, pass: passRef.current ?? undefined, name: deviceName() }));
+      ws.send(JSON.stringify({ type: "join", pin: pinRef.current, pass: passRef.current ?? undefined, key: deviceKey.current, name: deviceName() }));
       joinPending.current = true;
     }
   }, []);
@@ -58,7 +60,7 @@ export function useGuestRoom(roomId: string) {
   const startPeer = useCallback(() => {
     clearTimeout(restartTimer.current);
     peerRef.current?.close();
-    transfers.detach("The connection dropped");
+    transfers.detach();
     setLink("connecting");
     const peer: PeerLink = new PeerLink({
       offerer: true,
@@ -107,7 +109,7 @@ export function useGuestRoom(roomId: string) {
         if (m.type === "admitted") {
           joinPending.current = false;
           passRef.current = typeof m.pass === "string" ? m.pass : null;
-          writeSession(keyFor(roomId), { pin: pinRef.current, pass: passRef.current });
+          writeSession(keyFor(roomId), { pin: pinRef.current, pass: passRef.current, key: deviceKey.current });
           setHostName(String(m.host ?? ""));
           setHostAway(false);
           setPhase("in");
@@ -117,7 +119,7 @@ export function useGuestRoom(roomId: string) {
           joinPending.current = false;
           pinRef.current = null;
           passRef.current = null;
-          writeSession(keyFor(roomId), null);
+          writeSession(keyFor(roomId), { key: deviceKey.current });
           setTriesLeft(typeof m.left === "number" ? m.left : null);
           setPhase("pin");
         } else if (m.type === "signal" && m.data && typeof m.data === "object") {
@@ -140,7 +142,7 @@ export function useGuestRoom(roomId: string) {
         if (final) {
           writeSession(keyFor(roomId), null);
           peerRef.current?.close();
-          transfers.detach("The room closed");
+          transfers.end("The room closed");
           setWasIn(phaseRef.current === "in");
           setMessage(final);
           setPhase("ended");
@@ -177,7 +179,8 @@ export function useGuestRoom(roomId: string) {
     return true;
   }, []);
 
-  const busy = transfers.batches.some((b) => b.state === "active");
+  // Paused counts too: closing the page then would lose what's needed to carry on.
+  const busy = transfers.batches.some((b) => b.state === "active" || b.state === "paused");
 
   return { phase, triesLeft, hostName, hostAway, reconnecting, message, wasIn, link, messages, transfers, busy, submitPin, sendText, retry: startPeer };
 }

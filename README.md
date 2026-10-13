@@ -24,6 +24,8 @@ Any device can **send** files of any size.
 
 **Folders:** send one with **Send folder**, or drag it in on a computer. Chrome and Edge on a computer save it as a folder, with everything inside in place. Other devices get it as one `.zip` file. Up to 10,000 files at a time; empty folders aren't sent. iPhones and iPads can't pick a folder to send.
 
+**If the connection drops:** a transfer pauses and carries on from where it stopped once both devices are back, as long as both pages stay open. If the sending page was reloaded, pick the same files again and they carry on. If the receiving page is closed or reloaded, the transfer starts again. A device that drops and rejoins keeps its place and its conversation on the main device.
+
 **Limits**
 
 - Both devices need the page open, and phone screens need to stay on (Lanet asks the phone to keep the screen on while files move).

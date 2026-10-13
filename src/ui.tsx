@@ -43,10 +43,14 @@ const LINK_TEXT = {
   connected: "Connected directly",
   reconnecting: "Reconnecting…",
   blocked: "Can't connect directly",
+  left: "Not connected",
 } as const;
 
 export function LinkPill({ link }: { link: keyof typeof LINK_TEXT }) {
-  const look = link === "connected" ? "bg-accent-soft text-ink" : link === "blocked" ? "bg-bad-soft text-bad" : "bg-warn-soft text-on-warn";
+  const look =
+    link === "connected" ? "bg-accent-soft text-ink" :
+    link === "blocked" ? "bg-bad-soft text-bad" :
+    link === "left" ? "border border-line text-muted" : "bg-warn-soft text-on-warn";
   return <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs ${look}`}>{LINK_TEXT[link]}</span>;
 }
 

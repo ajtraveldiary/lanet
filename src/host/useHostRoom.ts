@@ -5,7 +5,12 @@ import { PeerLink, type LinkState, type Signal } from "../lib/peer";
 import { applyChat, newText, readChat, type ChatMsg } from "../lib/chat";
 import { Transfers } from "../lib/transfers";
 
-export type Guest = { id: string; name: string; link: LinkState; messages: ChatMsg[]; unread: number; transfers: Transfers };
+// `id` is the room's name for the device's current visit (new on every rejoin); `key` is the device's own
+// lasting one, so a device that drops and comes back keeps its conversation and its paused transfers.
+export type Guest = {
+  id: string; key: string; name: string; present: boolean; link: LinkState;
+  messages: ChatMsg[]; unread: number; transfers: Transfers;
+};
 type Saved = { id: string; token: string; pin: string };
 
 // Kept for this tab only, so a reload goes back into the same room with the same PIN.
@@ -57,8 +62,8 @@ export function useHostRoom() {
     if (tickTimer.current) return;
     tickTimer.current = window.setTimeout(() => { tickTimer.current = 0; setTick((t) => t + 1); }, 150);
   }, []);
-  const newGuest = useCallback((id: string, name: string): Guest => (
-    { id, name, link: "connecting", messages: [], unread: 0, transfers: new Transfers(redraw) }
+  const newGuest = useCallback((id: string, name: string, key: string): Guest => (
+    { id, key, name, present: true, link: "connecting", messages: [], unread: 0, transfers: new Transfers(redraw) }
   ), [redraw]);
 
   const select = useCallback((id: string | null) => {
@@ -70,7 +75,7 @@ export function useHostRoom() {
   const dropPeer = useCallback((id: string) => {
     peers.current.get(id)?.close();
     peers.current.delete(id);
-    guest(id)?.transfers.detach("The connection dropped");
+    guest(id)?.transfers.detach();
   }, []);
 
   const makePeer = useCallback((id: string) => {
@@ -119,25 +124,41 @@ export function useHostRoom() {
           tries = 0;
           setStatus("open");
           setLocked(m.locked === true);
-          const list: { id: string; name: string }[] = Array.isArray(m.guests) ? m.guests : [];
+          const list: { id: string; name: string; key?: string }[] = Array.isArray(m.guests) ? m.guests : [];
           for (const id of [...peers.current.keys()]) if (!list.some((x) => x.id === id)) dropPeer(id);
           // After a reload this page has no connections left; ask each device to set one up again.
           for (const x of list) {
             if (peers.current.get(x.id)?.state !== "connected") ws.send(JSON.stringify({ type: "signal", to: x.id, data: { restart: true } }));
           }
-          updateGuests((old) => list.reduce<Guest[]>((acc, x) => {
-            acc.push(old.find((g) => g.id === x.id) ?? newGuest(x.id, uniqueName(acc, x.name)));
-            return acc;
-          }, []));
+          updateGuests((old) => {
+            const next: Guest[] = [];
+            for (const x of list) {
+              const was = old.find((g) => g.id === x.id) ?? (x.key ? old.find((g) => g.key === x.key) : undefined);
+              next.push(was ? { ...was, id: x.id, present: true } : newGuest(x.id, uniqueName([...old, ...next], x.name), x.key ?? ""));
+            }
+            // Devices that left while this page was away stay listed with what they had.
+            for (const g of old) if (!next.some((n) => n.id === g.id || (g.key && n.key === g.key))) next.push({ ...g, present: false });
+            return next;
+          });
         } else if (m.type === "knock") {
           // The PIN is checked here, on the main device, not on the server.
           const ok = m.pin === room.pin;
           ws.send(JSON.stringify({ type: "admit", to: m.from, ok }));
           if (ok) {
-            updateGuests((list) => {
-              const rest = list.filter((x) => x.id !== m.from);
-              return [...rest, newGuest(m.from, uniqueName(rest, String(m.name)))];
-            });
+            const key = typeof m.key === "string" ? m.key : "";
+            const back = key ? guestsRef.current.find((g) => g.key === key) : undefined;
+            if (back) {
+              // A device coming back: same entry, same conversation, its paused transfers carry on.
+              if (back.id !== m.from) dropPeer(back.id);
+              const wasOpen = selectedRef.current === back.id;
+              updateGuests((list) => list.map((g) => (g.key === key ? { ...g, id: m.from, present: true, link: "connecting" } : g)));
+              if (wasOpen) select(m.from);
+            } else {
+              updateGuests((list) => {
+                const rest = list.filter((x) => x.id !== m.from);
+                return [...rest, newGuest(m.from, uniqueName(rest, String(m.name)), key)];
+              });
+            }
           } else {
             setNotice(`${m.name} typed a wrong PIN.`);
           }
@@ -152,9 +173,15 @@ export function useHostRoom() {
             peers.current.get(m.from)?.handle(data);
           }
         } else if (m.type === "left") {
+          const g = guest(m.from);
           dropPeer(m.from);
-          updateGuests((list) => list.filter((x) => x.id !== m.from));
-          if (selectedRef.current === m.from) select(null);
+          // A device with a key may come back (a dropped Wi-Fi, a reload); keep it listed until then.
+          if (g?.key) {
+            patch(m.from, (x) => ({ ...x, present: false }));
+          } else {
+            updateGuests((list) => list.filter((x) => x.id !== m.from));
+            if (selectedRef.current === m.from) select(null);
+          }
         } else if (m.type === "locked") {
           setLocked(true);
         }
@@ -182,7 +209,7 @@ export function useHostRoom() {
       wsRef.current = null;
       for (const p of all.values()) p.close();
       all.clear();
-      for (const g of guestsRef.current) g.transfers.detach("The room closed");
+      for (const g of guestsRef.current) g.transfers.end("The room closed");
     };
   }, [room, makePeer, patch, select, updateGuests, newGuest, dropPeer]);
 
@@ -213,6 +240,8 @@ export function useHostRoom() {
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "close" }));
     writeSession(KEY, null);
+    // Half-received files are dropped, not left open.
+    for (const g of guestsRef.current) g.transfers.end("The room closed");
     updateGuests(() => []);
     setNotice(null);
     select(null);
@@ -227,7 +256,8 @@ export function useHostRoom() {
     return true;
   }, [patch]);
 
-  const busy = guests.some((g) => g.transfers.batches.some((b) => b.state === "active"));
+  // Paused counts too: closing the page then would lose what's needed to carry on.
+  const busy = guests.some((g) => g.transfers.batches.some((b) => b.state === "active" || b.state === "paused"));
 
   return {
     room, status, guests, selected, notice, locked, ended, starting, busy,

@@ -101,18 +101,21 @@ function Room({ room, status, guests, selected, notice, locked, close, select, s
         )}
       </Card>
 
-      {open && open.link === "blocked" && <Note tone="bad">{BLOCKED_HELP}</Note>}
+      {open && open.present && open.link === "blocked" && <Note tone="bad">{BLOCKED_HELP}</Note>}
+      {open && !open.present && (
+        <Note tone="warn">{open.name} isn't connected. If it comes back, it picks up here, and paused files carry on.</Note>
+      )}
       {open && (
         <Card title={`Files with ${open.name}`}>
-          <FilesPanel key={open.id} transfers={open.transfers} otherName={open.name} canSend={open.link === "connected"} />
+          <FilesPanel key={open.key || open.id} transfers={open.transfers} otherName={open.name} canSend={open.present && open.link === "connected"} />
         </Card>
       )}
       {open && (
         <Card title={`Text with ${open.name}`}>
           <Conversation
-            key={open.id}
+            key={open.key || open.id}
             messages={open.messages}
-            canSend={open.link === "connected"}
+            canSend={open.present && open.link === "connected"}
             onSend={(body) => sendText(open.id, body)}
             otherName={open.name}
           />
@@ -143,7 +146,7 @@ function GuestList({ guests, selected, onSelect }: { guests: Guest[]; selected: 
             {g.unread > 0 && (
               <span className="rounded-full bg-accent px-2 text-xs font-semibold text-on-accent" aria-label={`${g.unread} new`}>{g.unread}</span>
             )}
-            <LinkPill link={g.link} />
+            <LinkPill link={g.present ? g.link : "left"} />
           </button>
         </li>
       ))}
