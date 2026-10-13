@@ -22,6 +22,8 @@ Send files, folders and text between devices on the same Wi-Fi, straight from th
 
 Any device can **send** files of any size.
 
+**Folders:** send one with **Send folder**, or drag it in on a computer. Chrome and Edge on a computer save it as a folder, with everything inside in place. Other devices get it as one `.zip` file. Up to 10,000 files at a time; empty folders aren't sent. iPhones and iPads can't pick a folder to send.
+
 **Limits**
 
 - Both devices need the page open, and phone screens need to stay on (Lanet asks the phone to keep the screen on while files move).
@@ -76,6 +78,7 @@ The app is then live at `https://lanet.<your-subdomain>.workers.dev`.
   - `lib/peer.ts` — the direct connection (WebRTC data channels).
   - `lib/transfers.ts` — offering, accepting, sending and receiving files, with flow control so a 20 GB file never has to fit in memory.
   - `lib/sinks.ts`, `public/sw.js`, `lib/store-worker.ts` — the ways a received file is saved.
+  - `lib/pick.ts`, `lib/zip.ts` — sending folders, and packing a received folder into a `.zip` (with [client-zip](https://github.com/Touffy/client-zip)).
   - `lib/chat.ts`, `Conversation.tsx` — text and links.
 
 ## Security notes

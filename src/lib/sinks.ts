@@ -8,17 +8,23 @@ import { isIOS, isSafari, numbered } from "./files";
 import { randomKey } from "./peer";
 
 export type SinkKind = "folder" | "download" | "browser" | "memory";
-export type Saved = { kind: "folder"; name: string } | { kind: "download"; name: string } | { kind: "file"; file: File };
+export type Saved =
+  | { kind: "folder"; name: string }
+  | { kind: "download"; name: string }
+  | { kind: "file"; file: File }
+  | { kind: "zipped" };  // went into the batch's .zip
 
 export interface FileWriter {
   write(b: ArrayBuffer): Promise<void>;
   close(): Promise<Saved>;
   abort(): Promise<void>;
 }
+// One per accepted batch. Only the folder kind takes paths with folders in them ("Photos/a.jpg");
+// the others get plain names, and a sent folder reaches them as one .zip (zip.ts).
 export interface Sink {
   kind: SinkKind;
   where: string;
-  open(name: string, size: number, type: string): Promise<FileWriter>;
+  open(path: string, size: number, type: string): Promise<FileWriter>;
 }
 
 export const MEMORY_LIMIT = 500 * 1024 ** 2;
@@ -74,7 +80,8 @@ async function folder(): Promise<FileSystemDirectoryHandle> {
 export async function openSink(kind: SinkKind, total: number): Promise<Sink> {
   if (kind === "folder") {
     const dir = await folder();
-    return { kind, where: dir.name ? `the “${dir.name}” folder` : "the folder you picked", open: (name) => folderWriter(dir, name) };
+    const tops = new Map<string, string>();
+    return { kind, where: dir.name ? `the “${dir.name}” folder` : "the folder you picked", open: (path) => folderWriter(dir, path, tops) };
   }
   if (kind === "download") return { kind, where: "your downloads", open: (name, size) => downloadWriter(name, size) };
   if (kind === "browser") {
@@ -89,22 +96,42 @@ export async function openSink(kind: SinkKind, total: number): Promise<Sink> {
   return { kind, where: "this page until you save them", open: (name, _size, type) => memoryWriter(name, type) };
 }
 
-async function folderWriter(dir: FileSystemDirectoryHandle, wanted: string): Promise<FileWriter> {
+// `tops` remembers, for one batch, what each sent top-level folder is called here.
+async function folderWriter(root: FileSystemDirectoryHandle, path: string, tops: Map<string, string>): Promise<FileWriter> {
+  const parts = path.split("/");
+  const wanted = parts.pop()!;
+  let dir = root;
+  if (parts.length) {
+    // A sent folder never merges into one already here: "Photos" becomes "Photos (2)" as a whole.
+    let top = tops.get(parts[0]);
+    if (!top) {
+      top = parts[0];
+      for (let n = 2; await taken(root, top); n++) top = `${parts[0]} (${n})`;
+      tops.set(parts[0], top);
+    }
+    dir = await root.getDirectoryHandle(top, { create: true });
+    for (const p of parts.slice(1)) dir = await dir.getDirectoryHandle(p, { create: true });
+  }
   let name = wanted;
   // Never overwrite: "photo.jpg" becomes "photo (2).jpg" when the folder already has one.
-  for (let n = 2; await exists(dir, name); n++) name = numbered(wanted, n);
+  for (let n = 2; await taken(dir, name); n++) name = numbered(wanted, n);
   const fh = await dir.getFileHandle(name, { create: true });
   const w = await fh.createWritable();
+  const shown = [...(parts.length ? [tops.get(parts[0])!, ...parts.slice(1)] : []), name].join("/");
   return {
     write: (b) => w.write(b),
-    close: async () => { await w.close(); return { kind: "folder", name }; },
+    close: async () => { await w.close(); return { kind: "folder", name: shown }; },
     // The browser writes to a hidden temporary file until close, so only the empty name needs removing.
     abort: async () => { await w.abort().catch(() => {}); await dir.removeEntry(name).catch(() => {}); },
   };
 }
 
-async function exists(dir: FileSystemDirectoryHandle, name: string): Promise<boolean> {
-  try { await dir.getFileHandle(name); return true; } catch { return false; }
+// A file or a folder of that name is already there.
+async function taken(dir: FileSystemDirectoryHandle, name: string): Promise<boolean> {
+  try { await dir.getFileHandle(name); return true; } catch (e) {
+    if ((e as DOMException)?.name === "TypeMismatchError") return true;
+  }
+  try { await dir.getDirectoryHandle(name); return true; } catch { return false; }
 }
 
 function downloadWriter(name: string, size: number): Promise<FileWriter> {

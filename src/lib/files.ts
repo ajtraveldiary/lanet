@@ -44,6 +44,20 @@ export function safeName(raw: unknown): string {
   return name || "file";
 }
 
+const MAX_DEPTH = 32;
+
+// A path inside a sent folder ("Photos/2024/a.jpg") from the other device: every part cleaned like a name,
+// and nothing that could climb out of the folder ("..", a leading "/", a drive letter).
+export function safePath(raw: unknown): string {
+  const parts = String(raw ?? "")
+    .split(/[\\/]+/)
+    .map((p) => p.trim())
+    .filter((p) => p && p !== "." && p !== "..");
+  if (!parts.length) return "file";
+  const name = parts.pop()!;
+  return [...parts.slice(0, MAX_DEPTH - 1), name].map(safeName).join("/");
+}
+
 // "photo.jpg" → "photo (2).jpg"
 export function numbered(name: string, n: number): string {
   const dot = name.lastIndexOf(".");

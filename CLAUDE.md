@@ -99,7 +99,7 @@ These were asked for or approved by the user. Keep them unless the user changes 
 1. Rooms, PIN, QR code, React app — done.
 2. Direct connection, text and links — done. The user confirmed messages went both ways on their phone.
 3. Files with progress, cancel, the four ways of saving — done and tested in two tabs on the PC (512 MB at about 28 MB/s, byte for byte correct). **Not yet tried on the user's phone.** The `download` way of saving is untested, because that test starts a real download.
-4. Folders, zip fallback — next.
+4. Folders, zip fallback — done and tested in two tabs on the PC. Details chosen in this step (not separately asked): empty folders aren't sent (the browser's folder picker doesn't list them); at most 10,000 files per send; the `.zip` is not compressed (fast, and photos and videos don't shrink); a top-level folder whose name is taken is saved as "Name (2)" as a whole; the zip uses the `client-zip` library (MIT, no dependencies).
 5. Resume after a dropped connection (needs a stable device identity across rejoins).
 6. Screens polish, plain error messages.
 7. Automated tests (Playwright, two browser contexts) and a real-device check.
@@ -115,7 +115,9 @@ These were asked for or approved by the user. Keep them unless the user changes 
 - `src/lib/peer.ts` — `PeerLink`: one WebRTC connection, a control channel `ctl` for JSON messages (split into parts when large), and one extra channel per file.
 - `src/lib/chat.ts`, `src/Conversation.tsx` — text and links.
 - `src/lib/transfers.ts` — the file protocol: `offer` → `accept`/`decline` → one channel per file (`f:<batch>:<index>`), binary pieces, `end`; the receiver answers `ack:<bytes>`, `done` or `err:<reason>`. The sender stays at most 16 MB ahead of what the receiver has written.
-- `src/lib/sinks.ts` — where received files go: `folder`, `download` (via `public/sw.js`), `browser` (via `src/lib/store-worker.ts`), `memory`.
+- `src/lib/sinks.ts` — where received files go: `folder`, `download` (via `public/sw.js`), `browser` (via `src/lib/store-worker.ts`), `memory`. Only `folder` takes paths with folders in them.
+- `src/lib/pick.ts` — files and folders from the pickers and from drag and drop, each with its path inside the folder.
+- `src/lib/zip.ts` — a received folder packed into one `.zip` as it arrives, for every way of saving except `folder`. Its predicted size must match the real one exactly, because a streamed download announces it in advance.
 - `src/Files.tsx` — the Files screen.
 
 ## Things that will bite you

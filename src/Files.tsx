@@ -1,23 +1,31 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { Button, Note } from "./ui";
-import type { Batch, Caps, Transfers } from "./lib/transfers";
+import { MAX_FILES, type Batch, type Caps, type Transfers } from "./lib/transfers";
 import { formatSize, formatTime } from "./lib/files";
+import { canPickFolder, fromDrop, fromInput, type Picked } from "./lib/pick";
 import { MEMORY_LIMIT, canShareFiles, chooseFolder, saveFile, savedFolderName, sinkKind } from "./lib/sinks";
 
 const IOS_WARN = 2 * 1024 ** 3;
 
 export function FilesPanel({ transfers, otherName, canSend }: { transfers: Transfers; otherName: string; canSend: boolean }) {
   const input = useRef<HTMLInputElement>(null);
-  const [pending, setPending] = useState<{ files: File[]; warning: string } | null>(null);
+  const folderInput = useRef<HTMLInputElement>(null);
+  const [pending, setPending] = useState<{ files: Picked[]; warning: string } | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
 
-  const go = (files: File[]) => {
+  // React has no prop for the folder picker; the attribute is set by hand.
+  useEffect(() => { folderInput.current?.setAttribute("webkitdirectory", ""); }, []);
+
+  const go = (files: Picked[]) => {
     setPending(null);
     setProblem(transfers.offer(files) ? null : "Not connected right now. Try again in a moment.");
   };
-  const pick = (files: File[]) => {
-    if (!files.length) return;
+  const pick = (files: Picked[]) => {
+    if (!files.length) return setProblem("That folder is empty. Empty folders aren't sent.");
+    if (files.length > MAX_FILES) {
+      return setProblem(`That's ${files.length.toLocaleString()} files. Send at most ${MAX_FILES.toLocaleString()} at a time, for example one folder inside it at a time.`);
+    }
     const warning = sendWarning(files, transfers.remote, otherName);
     if (warning) setPending({ files, warning });
     else go(files);
@@ -25,7 +33,8 @@ export function FilesPanel({ transfers, otherName, canSend }: { transfers: Trans
   const onDrop = (e: DragEvent) => {
     e.preventDefault();
     setDragging(false);
-    if (canSend) pick([...e.dataTransfer.files]);
+    if (!canSend) return;
+    fromDrop(e.dataTransfer).then(pick, () => setProblem("Couldn't read what was dropped. Try Send files or Send folder instead."));
   };
 
   return (
@@ -37,14 +46,10 @@ export function FilesPanel({ transfers, otherName, canSend }: { transfers: Trans
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <Button kind="primary" disabled={!canSend} onClick={() => input.current?.click()}>Send files</Button>
-        <span className="hidden text-sm text-muted sm:inline">or drop files here</span>
-        <input
-          ref={input}
-          type="file"
-          multiple
-          hidden
-          onChange={(e) => { pick([...(e.target.files ?? [])]); e.target.value = ""; }}
-        />
+        {canPickFolder() && <Button disabled={!canSend} onClick={() => folderInput.current?.click()}>Send folder</Button>}
+        <span className="hidden text-sm text-muted sm:inline">or drop files and folders here</span>
+        <input ref={input} type="file" multiple hidden onChange={(e) => { pick(fromInput(e.target.files)); e.target.value = ""; }} />
+        <input ref={folderInput} type="file" hidden onChange={(e) => { pick(fromInput(e.target.files)); e.target.value = ""; }} />
       </div>
       {pending && (
         <div className="space-y-2">
@@ -66,8 +71,8 @@ export function FilesPanel({ transfers, otherName, canSend }: { transfers: Trans
   );
 }
 
-function sendWarning(files: File[], remote: Caps | null, name: string): string | null {
-  const total = files.reduce((s, f) => s + f.size, 0);
+function sendWarning(files: Picked[], remote: Caps | null, name: string): string | null {
+  const total = files.reduce((s, f) => s + f.file.size, 0);
   if (remote?.sink === "browser" && remote.room !== undefined && total > remote.room) {
     return `${name} may not have room for ${formatSize(total)}: its browser has about ${formatSize(remote.room)} free.`;
   }
@@ -92,9 +97,9 @@ function ReceiveWhere() {
   };
   const text =
     kind === "folder" ? (folder ? <>Files you accept are saved in the “{folder}” folder.</> : "Files you accept are saved in a folder you pick.") :
-    kind === "download" ? "Files you accept go to your downloads." :
-    kind === "browser" ? "Files you accept are kept in this browser until you tap Save." :
-    `Files you accept are kept on this page until you tap Save, up to ${formatSize(MEMORY_LIMIT)} at a time.`;
+    kind === "download" ? "Files you accept go to your downloads. Folders arrive as one .zip file." :
+    kind === "browser" ? "Files you accept are kept in this browser until you tap Save. Folders arrive as one .zip file." :
+    `Files you accept are kept on this page until you tap Save, up to ${formatSize(MEMORY_LIMIT)} at a time. Folders arrive as one .zip file.`;
   return (
     <div className="flex flex-wrap items-center gap-x-2 text-sm text-muted">
       <span>{text}</span>
@@ -128,17 +133,33 @@ function title(b: Batch, other: string): string {
 
 const SHOWN = 5;
 
+// A sent folder whose name was already taken was saved as "Photos (2)"; say so.
+function renamed(b: Batch): string {
+  const names = new Set<string>();
+  for (const f of b.files) {
+    if (f.saved?.kind !== "folder" || !f.path.includes("/")) continue;
+    const sent = f.path.split("/")[0], kept = f.saved.name.split("/")[0];
+    if (sent !== kept) names.add(`“${kept}”`);
+  }
+  return names.size ? `, as ${[...names].join(", ")}` : "";
+}
+
 function BatchView({ b, transfers, otherName }: { b: Batch; transfers: Transfers; otherName: string }) {
   const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const count = `${b.files.length} ${b.files.length === 1 ? "file" : "files"} · ${formatSize(b.total)}`;
-  const kept = b.files.flatMap((f) => (f.saved?.kind === "file" ? [f.saved.file] : []));
+  const folders = b.folder ? [...new Set(b.files.filter((f) => f.path.includes("/")).map((f) => f.path.split("/")[0]))] : [];
+  const zipSaved = b.zip?.saved;
+  const zipFile = zipSaved?.kind === "file" ? zipSaved.file : null;
+  // What waits for a Save tap: the packed .zip, or each file kept in the browser.
+  const kept = zipFile ? [zipFile] : b.files.flatMap((f) => (f.saved?.kind === "file" ? [f.saved.file] : []));
   const shown = showAll ? b.files : b.files.slice(0, SHOWN);
+  const willZip = !b.out && b.state === "incoming" && b.folder && sinkKind() !== "folder";
 
   const accept = async () => {
     setBusy(true);
-    setProblem(await transfers.accept(b.id));
+    setProblem(await transfers.accept(b.id, otherName));
     setBusy(false);
   };
   const saveAll = async () => {
@@ -161,11 +182,16 @@ function BatchView({ b, transfers, otherName }: { b: Batch; transfers: Transfers
         <p className="font-medium">{title(b, otherName)}</p>
         <p className="text-sm text-muted">{count}</p>
       </div>
+      {folders.length > 0 && (
+        <p className="mt-1 break-words text-sm [overflow-wrap:anywhere]">
+          {folders.length === 1 ? "Folder" : "Folders"}: <b>{folders.join(", ")}</b>
+        </p>
+      )}
 
       <ul className="mt-2 space-y-1 text-sm">
         {shown.map((f, i) => (
           <li key={i} className="flex flex-wrap items-center gap-x-2">
-            <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{f.name}</span>
+            <span className="min-w-0 flex-1 break-words [overflow-wrap:anywhere]">{f.path}</span>
             <span className="text-muted">{formatSize(f.size)}</span>
             {f.state === "done" && f.saved?.kind === "file" && (
               <button type="button" onClick={() => saveFile((f.saved as { file: File }).file)} className="min-h-11 cursor-pointer rounded-md px-3 text-accent underline underline-offset-2">Save</button>
@@ -193,8 +219,15 @@ function BatchView({ b, transfers, otherName }: { b: Batch; transfers: Transfers
 
       {b.error && b.state === "failed" && <div className="mt-2"><Note tone="bad">{b.error}</Note></div>}
       {problem && <div className="mt-2"><Note tone="bad">{problem}</Note></div>}
-      {!b.out && b.state === "done" && b.where && kept.length === 0 && <p className="mt-2 text-sm text-muted">Saved in {b.where}.</p>}
-      {!b.out && b.state === "done" && kept.length > 0 && <p className="mt-2 text-sm text-muted">Tap Save to keep them on this device.</p>}
+      {willZip && <p className="mt-2 text-sm text-muted">This device can't save a folder, so it arrives as one .zip file.</p>}
+      {!b.out && b.state === "done" && (
+        <p className="mt-2 text-sm text-muted">
+          {zipSaved?.kind === "download" ? <>Saved to your downloads as “{b.zip!.name}”.</> :
+            zipFile ? <>Packed into “{b.zip!.name}”. Tap Save to keep it on this device.</> :
+            kept.length > 0 ? "Tap Save to keep them on this device." :
+            b.where ? `Saved in ${b.where}${renamed(b)}.` : null}
+        </p>
+      )}
 
       <div className="mt-3 flex flex-wrap gap-2 empty:hidden">
         {b.state === "incoming" && (
@@ -204,7 +237,8 @@ function BatchView({ b, transfers, otherName }: { b: Batch; transfers: Transfers
           </>
         )}
         {(b.state === "asking" || b.state === "active") && <Button onClick={() => transfers.cancel(b.id)}>Cancel</Button>}
-        {!b.out && b.state === "done" && kept.length > 1 && <Button onClick={saveAll}>Save all</Button>}
+        {!b.out && b.state === "done" && zipFile && <Button kind="primary" onClick={saveAll}>Save the .zip</Button>}
+        {!b.out && b.state === "done" && !zipFile && kept.length > 1 && <Button onClick={saveAll}>Save all</Button>}
       </div>
     </li>
   );

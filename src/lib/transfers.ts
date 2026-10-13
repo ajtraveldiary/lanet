@@ -6,10 +6,13 @@
 // never runs more than WINDOW bytes ahead of what the receiver has written, so a slow disk can't fill memory.
 import { randomKey, type PeerLink } from "./peer";
 import { openSink, sinkKind, browserRoom, type FileWriter, type Saved, type Sink, type SinkKind } from "./sinks";
-import { isIOS, safeName } from "./files";
+import { isIOS, safePath } from "./files";
+import type { Picked } from "./pick";
+import { ZipBatch, zipLength, zipName } from "./zip";
 
 export type FileState = "waiting" | "moving" | "done" | "failed";
-export type TFile = { name: string; size: number; type: string; done: number; state: FileState; saved?: Saved };
+// `path` is the file's place inside a sent folder ("Photos/2024/a.jpg"), or just its name.
+export type TFile = { path: string; size: number; type: string; modified: number; done: number; state: FileState; saved?: Saved };
 export type BatchState = "asking" | "incoming" | "active" | "done" | "declined" | "cancelled" | "failed";
 export type Batch = {
   id: string;
@@ -20,7 +23,9 @@ export type Batch = {
   state: BatchState;
   speed: number;   // bytes per second, smoothed
   error?: string;
-  where?: string;  // receiver: where the files went
+  where?: string;   // receiver: where the files went
+  folder: boolean;  // has files inside folders
+  zip?: { name: string; saved?: Saved };  // receiver: the folder arrives packed into this .zip
 };
 export type Caps = { ios: boolean; sink: SinkKind; room?: number };
 
@@ -28,7 +33,7 @@ const READ_BLOCK = 2 * 1024 ** 2;  // read from disk 2 MB at a time
 const HIGH = 8 * 1024 ** 2;        // most bytes waiting in the connection's own buffer
 const WINDOW = 16 * 1024 ** 2;     // most bytes sent but not yet written on the other side
 const ACK_EVERY = 1024 ** 2;
-const MAX_FILES = 10_000;
+export const MAX_FILES = 10_000;
 const MAX_SIZE = 2 ** 50;
 
 const reason = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -39,6 +44,7 @@ export class Transfers {
   private peer: PeerLink | null = null;
   private outFiles = new Map<string, File[]>();
   private sinks = new Map<string, Sink>();
+  private zips = new Map<string, ZipBatch>();
   private stops = new Map<string, () => void>();  // stops what a batch is doing right now
   private sending: Promise<void> = Promise.resolve();
   private samples = new Map<string, { at: number; done: number }>();
@@ -94,38 +100,53 @@ export class Transfers {
     return false;
   }
 
-  offer(files: File[]): boolean {
+  offer(picked: Picked[]): boolean {
+    const files: TFile[] = picked.map(({ file, path }) => (
+      { path, size: file.size, type: file.type, modified: file.lastModified, done: 0, state: "waiting" }
+    ));
     const b: Batch = {
       id: randomKey(),
       out: true,
-      files: files.map((f) => ({ name: f.name, size: f.size, type: f.type, done: 0, state: "waiting" })),
+      files,
       total: files.reduce((s, f) => s + f.size, 0),
       done: 0,
       state: "asking",
       speed: 0,
+      folder: files.some((f) => f.path.includes("/")),
     };
-    const sent = this.peer?.send({ t: "offer", id: b.id, files: b.files.map(({ name, size, type }) => ({ name, size, type })) });
-    if (!sent) return false;
-    this.outFiles.set(b.id, files);
+    const list = files.map(({ path, size, type, modified }) => ({ path, size, type, modified }));
+    if (!this.peer?.send({ t: "offer", id: b.id, files: list })) return false;
+    this.outFiles.set(b.id, picked.map((p) => p.file));
     this.batches.push(b);
     this.changed();
     return true;
   }
 
   // From a click: picking a folder or asking for permission needs one.
-  async accept(id: string): Promise<string | null> {
+  // `from` names the sending device, for the .zip's name when a folder has to be packed.
+  async accept(id: string, from: string): Promise<string | null> {
     const b = this.find(id, false);
     if (b?.state !== "incoming") return null;
-    let sink: Sink;
+    const kind = sinkKind();
+    const packed = b.folder && kind !== "folder";
+    let sink: Sink, zip: ZipBatch | null = null;
     try {
-      sink = await openSink(sinkKind(), b.total);
+      sink = await openSink(kind, packed ? zipLength(b.files) : b.total);
+      if (packed) {
+        const name = zipName(b.files, from);
+        zip = new ZipBatch(b.files, await sink.open(name, zipLength(b.files), "application/zip"));
+        b.zip = { name };
+      }
     } catch (e) {
       if ((e as DOMException)?.name === "AbortError") return null;  // closed the folder picker
       return reason(e);
     }
-    if (b.state !== "incoming") return null;  // cancelled while the picker was open
-    if (!this.peer?.send({ t: "accept", id })) return "Not connected right now. Try again in a moment.";
+    if (b.state !== "incoming" || !this.peer?.send({ t: "accept", id })) {
+      zip?.abort("Cancelled");
+      return b.state === "incoming" ? "Not connected right now. Try again in a moment." : null;
+    }
     this.sinks.set(id, sink);
+    if (zip) this.zips.set(id, zip);
     b.where = sink.where;
     b.state = "active";
     this.changed();
@@ -164,9 +185,19 @@ export class Transfers {
     for (const f of m.files as Record<string, unknown>[]) {
       const size = Number(f?.size);
       if (!Number.isSafeInteger(size) || size < 0 || size > MAX_SIZE) return;
-      files.push({ name: safeName(f.name), size, type: typeof f.type === "string" ? f.type.slice(0, 100) : "", done: 0, state: "waiting" });
+      files.push({
+        path: safePath(f.path),
+        size,
+        type: typeof f.type === "string" ? f.type.slice(0, 100) : "",
+        modified: Number.isSafeInteger(f.modified) ? (f.modified as number) : 0,
+        done: 0,
+        state: "waiting",
+      });
     }
-    this.batches.push({ id: m.id, out: false, files, total: files.reduce((s, f) => s + f.size, 0), done: 0, state: "incoming", speed: 0 });
+    this.batches.push({
+      id: m.id, out: false, files, total: files.reduce((s, f) => s + f.size, 0), done: 0, state: "incoming", speed: 0,
+      folder: files.some((f) => f.path.includes("/")),
+    });
     this.changed();
   }
 
@@ -181,6 +212,8 @@ export class Transfers {
     this.stops.delete(b.id);
     this.outFiles.delete(b.id);
     this.sinks.delete(b.id);
+    this.zips.get(b.id)?.abort(why ?? "Cancelled");
+    this.zips.delete(b.id);
     this.changed();
   }
 
@@ -198,14 +231,28 @@ export class Transfers {
   }
 
   private finished(b: Batch) {
-    if (b.files.every((f) => f.state === "done") && b.state === "active") {
-      b.state = "done";
-      b.done = b.total;
-      this.stops.delete(b.id);
-      this.outFiles.delete(b.id);
-      this.sinks.delete(b.id);
-      this.changed();
+    if (!b.files.every((f) => f.state === "done") || b.state !== "active") return;
+    const zip = this.zips.get(b.id);
+    // A packed folder is done once the .zip itself is finished and saved.
+    if (zip) {
+      zip.done.then(
+        (saved) => { if (b.zip) b.zip.saved = saved; this.complete(b); },
+        (e) => { if (b.state === "active") this.stop(b, "failed", reason(e)); },
+      );
+    } else {
+      this.complete(b);
     }
+  }
+
+  private complete(b: Batch) {
+    if (b.state !== "active") return;
+    b.state = "done";
+    b.done = b.total;
+    this.stops.delete(b.id);
+    this.outFiles.delete(b.id);
+    this.sinks.delete(b.id);
+    this.zips.delete(b.id);
+    this.changed();
   }
 
   // Batches go out one at a time, so a second one doesn't halve the speed of the first.
@@ -274,7 +321,7 @@ export class Transfers {
       try {
         block = new Uint8Array(await file.slice(sent, end).arrayBuffer());
       } catch {
-        throw new Error(`Couldn't read “${f.name}”. Was it moved or deleted?`);
+        throw new Error(`Couldn't read “${f.path}”. Was it moved or deleted?`);
       }
       for (let o = 0; o < block.length; o += piece) {
         while (!broken && (ch.bufferedAmount > HIGH || sent + o - acked > WINDOW)) await new Promise<void>((r) => { wake = r; });
@@ -296,7 +343,8 @@ export class Transfers {
     const f = b.files[i];
     f.state = "moving";
     let writer: FileWriter | null = null, received = 0, written = 0, lastAck = 0, over = false;
-    let chain: Promise<void> = sink.open(f.name, f.size, f.type).then((w) => { writer = w; });
+    const zip = this.zips.get(b.id);
+    let chain: Promise<void> = (zip ? Promise.resolve(zip.entry(i)) : sink.open(f.path, f.size, f.type)).then((w) => { writer = w; });
     const fail = (why: string, tell = true) => {
       if (over) return;
       over = true;
