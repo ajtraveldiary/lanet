@@ -1,0 +1,11 @@
+{
+  "name": "lanet",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-01-01",
+  // Step 0 serves the bare test page; the React build replaces this folder later.
+  "assets": { "directory": "./spike" },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }]
+}

@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lanet connection test</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { margin: 0 auto; padding: 16px; max-width: 640px; line-height: 1.45; }
+  h1 { font-size: 1.3rem; margin: 0 0 4px; }
+  button, select, input { font: inherit; min-height: 44px; }
+  button { padding: 0 16px; border-radius: 8px; border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer; }
+  button.primary { background: #1d4ed8; border-color: #1d4ed8; color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+  input[type=file] { max-width: 100%; }
+  .box { border: 1px solid #8885; border-radius: 10px; padding: 12px; margin: 12px 0; }
+  .link { font-size: 1.25rem; font-weight: 600; word-break: break-all; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .bad { color: #c62828; } .good { color: #2e7d32; }
+  @media (prefers-color-scheme: dark) { .bad { color: #ef9a9a; } .good { color: #a5d6a7; } }
+  progress { width: 100%; height: 16px; }
+  #log { font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all; max-height: 280px; overflow: auto; background: #8881; padding: 8px; border-radius: 8px; }
+</style>
+</head>
+<body>
+<h1>Lanet: connection test</h1>
+<p>Step 0. Checks that two devices on your Wi-Fi can connect directly and how fast data moves. Received data is counted, not saved.</p>
+
+<div id="hostStart" class="box" hidden>
+  <button id="startBtn" class="primary">Start sharing</button>
+  <p id="localNote" class="bad" hidden>This page is open as “localhost”, so the link below won't work on another device. On this PC, open it with the PC's Wi-Fi address instead (for example http://192.168.0.51:8787).</p>
+</div>
+
+<div id="room" class="box" hidden>
+  On the other device, open:
+  <div id="link" class="link"></div>
+</div>
+
+<p id="status" aria-live="polite"></p>
+
+<div id="test" class="box" hidden>
+  <div class="row">
+    <select id="size" aria-label="Amount of test data">
+      <option value="104857600">100 MB</option>
+      <option value="1073741824" selected>1 GB</option>
+      <option value="5368709120">5 GB</option>
+      <option value="21474836480">20 GB</option>
+    </select>
+    <button id="sendTest" class="primary">Send test data</button>
+  </div>
+  <div class="row" style="margin-top:8px">
+    <input id="file" type="file" aria-label="Pick a file">
+    <button id="sendFile">Send this file</button>
+  </div>
+  <div id="prog" hidden style="margin-top:12px">
+    <div id="progText"></div>
+    <progress id="bar" max="1" value="0"></progress>
+  </div>
+  <p id="result"></p>
+</div>
+
+<details open>
+  <summary>Details</summary>
+  <div id="log"></div>
+</details>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const roomId = new URLSearchParams(location.search).get("r");
+const isHost = !roomId;
+const wsBase = (location.protocol === "https:" ? "wss://" : "ws://") + location.host;
+const CHUNK = 64 * 1024, BLOCK = 1 << 20, HIGH = 8 << 20, LOW = 1 << 20;
+let ws, pc, dc, peer, connectTimer, rx = null, txSize = 0;
+let chain = Promise.resolve();
+
+const fmt = (b) => b >= 1 << 30 ? (b / (1 << 30)).toFixed(2) + " GB" : (b / (1 << 20)).toFixed(1) + " MB";
+const speed = (b, ms) => (b / (1 << 20) / Math.max(ms / 1000, 0.001)).toFixed(1) + " MB/s";
+function log(...a) { const l = $("#log"); l.textContent += new Date().toLocaleTimeString() + "  " + a.join(" ") + "\n"; l.scrollTop = 1e9; }
+function status(text, cls = "") { $("#status").textContent = text; $("#status").className = cls; }
+function signal(msg) { ws.send(JSON.stringify(msg)); }
+
+log("this device:", navigator.userAgent);
+
+function openSocket(id, role) {
+  ws = new WebSocket(`${wsBase}/api/room/${id}/ws?role=${role}`);
+  // Handled one at a time, so a candidate never arrives before the offer it belongs to.
+  ws.onmessage = (e) => { const msg = JSON.parse(e.data); chain = chain.then(() => onSignal(msg)).catch((err) => log("error:", err.message || err)); };
+  ws.onclose = (e) => log("room connection closed", e.code, e.reason);
+  return new Promise((ok, fail) => { ws.onopen = ok; ws.onerror = () => fail(new Error("Could not reach the server")); });
+}
+
+async function onSignal(msg) {
+  switch (msg.type) {
+    case "hello":
+      if (msg.hostHere) await makeOffer();
+      else status("The main device isn't in this room. Press Start sharing on it again and use the new link.", "bad");
+      break;
+    case "joined": log("a device joined the room:", msg.from); break;
+    case "offer": {
+      peer = msg.from;
+      newPeer();
+      await pc.setRemoteDescription(msg.sdp);
+      await pc.setLocalDescription(await pc.createAnswer());
+      signal({ type: "answer", sdp: pc.localDescription, to: peer });
+      status("Connecting directly to the other device…");
+      break;
+    }
+    case "answer": await pc.setRemoteDescription(msg.sdp); break;
+    case "ice":
+      if (isHost && msg.from !== peer) return;
+      logCandidate("other device", msg.c.candidate);
+      await pc.addIceCandidate(msg.c);
+      break;
+    case "left": if (msg.from === peer) status("The other device left.", "bad"); break;
+    case "hostLeft": status("The main device left the room.", "bad"); break;
+  }
+}
+
+function logCandidate(side, line) {
+  const p = line.split(" ");
+  log(`${side} address: ${p[7] || "?"} ${p[4] || "?"} (${p[2] || "?"})`);
+}
+
+function newPeer() {
+  if (pc) pc.close();
+  // No STUN or TURN: only addresses on the local network are offered, so data can't leave it.
+  pc = new RTCPeerConnection({ iceServers: [] });
+  pc.onicecandidate = (e) => {
+    if (!e.candidate || !e.candidate.candidate) return;
+    logCandidate("this device", e.candidate.candidate);
+    signal(isHost ? { type: "ice", c: e.candidate, to: peer } : { type: "ice", c: e.candidate });
+  };
+  pc.onconnectionstatechange = () => {
+    log("connection:", pc.connectionState);
+    if (pc.connectionState === "connected") connected();
+    if (pc.connectionState === "failed") blocked();
+  };
+  pc.ondatachannel = (e) => setupChannel(e.channel);
+  clearTimeout(connectTimer);
+  connectTimer = setTimeout(() => { if (pc.connectionState !== "connected") blocked(); }, 20000);
+}
+
+async function makeOffer() {
+  newPeer();
+  setupChannel(pc.createDataChannel("data", { ordered: true }));
+  await pc.setLocalDescription(await pc.createOffer());
+  signal({ type: "offer", sdp: pc.localDescription });
+  status("Connecting directly to the main device…");
+}
+
+function blocked() {
+  status("Could not connect directly. This Wi-Fi may stop devices from reaching each other (common on guest, office or hotel Wi-Fi). Try home Wi-Fi or a phone hotspot.", "bad");
+}
+
+async function connected() {
+  clearTimeout(connectTimer);
+  status("Connected directly ✓", "good");
+  const stats = await pc.getStats();
+  let pair;
+  stats.forEach((s) => { if (s.type === "transport" && s.selectedCandidatePairId) pair = stats.get(s.selectedCandidatePairId); });
+  if (!pair) stats.forEach((s) => { if (s.type === "candidate-pair" && s.nominated && s.state === "succeeded") pair = s; });
+  if (!pair) return log("route: unknown");
+  const l = stats.get(pair.localCandidateId) || {}, r = stats.get(pair.remoteCandidateId) || {};
+  log(`route: ${l.candidateType} ${l.address || l.ip || ""}:${l.port} ↔ ${r.candidateType} ${r.address || r.ip || ""}:${r.port} over ${l.protocol}`);
+}
+
+function setupChannel(ch) {
+  dc = ch;
+  dc.binaryType = "arraybuffer";
+  dc.bufferedAmountLowThreshold = LOW;
+  dc.onopen = () => { log("data channel open, largest message", pc.sctp?.maxMessageSize ?? "?"); $("#test").hidden = false; };
+  dc.onclose = () => { log("data channel closed"); $("#test").hidden = true; };
+  dc.onmessage = (e) => typeof e.data === "string" ? onControl(JSON.parse(e.data)) : onData(e.data);
+}
+
+function showProgress(label, done, total, rate) {
+  $("#prog").hidden = false;
+  $("#progText").textContent = `${label}: ${fmt(done)} of ${fmt(total)}${rate ? " · " + rate : ""}`;
+  $("#bar").value = total ? done / total : 0;
+}
+function showResult(text, ok) { $("#result").textContent = text; $("#result").className = ok ? "good" : "bad"; log(text); }
+
+function onControl(m) {
+  if (m.t === "start") {
+    rx = { name: m.name, size: m.size, got: 0, t0: performance.now(), shown: 0 };
+    $("#result").textContent = "";
+    showProgress("Receiving " + m.name, 0, m.size);
+  } else if (m.t === "end" && rx) {
+    const ms = performance.now() - rx.t0, ok = rx.got === rx.size;
+    showProgress("Received " + rx.name, rx.got, rx.size, speed(rx.got, ms));
+    showResult(`Received ${fmt(rx.got)} in ${(ms / 1000).toFixed(1)} s, ${speed(rx.got, ms)}. ${ok ? "All bytes arrived ✓" : "Expected " + fmt(rx.size) + " ✗"}`, ok);
+    dc.send(JSON.stringify({ t: "result", got: rx.got, ms }));
+    rx = null;
+  } else if (m.t === "result") {
+    showResult(`The other device received ${fmt(m.got)} in ${(m.ms / 1000).toFixed(1)} s, ${speed(m.got, m.ms)}.`, m.got === txSize);
+    busy(false);
+  }
+}
+
+function onData(buf) {
+  if (!rx) return;
+  rx.got += buf.byteLength;
+  const now = performance.now();
+  if (now - rx.shown > 250) { rx.shown = now; showProgress("Receiving " + rx.name, rx.got, rx.size, speed(rx.got, now - rx.t0)); }
+}
+
+function drained() {
+  return new Promise((ok, fail) => {
+    dc.addEventListener("bufferedamountlow", ok, { once: true });
+    dc.addEventListener("close", () => fail(new Error("The connection closed")), { once: true });
+  });
+}
+
+function busy(on) { $("#sendTest").disabled = on; $("#sendFile").disabled = on; }
+
+async function send(size, file) {
+  busy(true);
+  $("#result").textContent = "";
+  txSize = size;
+  const name = file ? file.name : "test data";
+  const max = Math.min(CHUNK, pc.sctp?.maxMessageSize || CHUNK);
+  // One random piece sent again and again, so even 20 GB of test data uses no memory.
+  const filler = crypto.getRandomValues(new Uint8Array(max));
+  const t0 = performance.now();
+  let sent = 0, shown = 0;
+  try {
+    dc.send(JSON.stringify({ t: "start", name, size }));
+    while (sent < size) {
+      const len = Math.min(BLOCK, size - sent);
+      const block = file ? new Uint8Array(await file.slice(sent, sent + len).arrayBuffer()) : null;
+      for (let o = 0; o < len; o += max) {
+        if (dc.bufferedAmount > HIGH) await drained();
+        const n = Math.min(max, len - o);
+        dc.send(block ? block.subarray(o, o + n) : n === max ? filler : filler.subarray(0, n));
+      }
+      sent += len;
+      const now = performance.now();
+      if (now - shown > 250) { shown = now; showProgress("Sending " + name, sent, size, speed(sent, now - t0)); }
+    }
+    dc.send(JSON.stringify({ t: "end" }));
+    showProgress("Sent " + name + ", waiting for the other device", sent, size);
+  } catch (err) {
+    showResult("Sending stopped: " + (err.message || err), false);
+    busy(false);
+  }
+}
+
+$("#sendTest").onclick = () => send(Number($("#size").value));
+$("#sendFile").onclick = () => { const f = $("#file").files[0]; if (f) send(f.size, f); else status("Pick a file first.", "bad"); };
+
+if (isHost) {
+  $("#hostStart").hidden = false;
+  $("#localNote").hidden = !["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+  $("#startBtn").onclick = async () => {
+    $("#startBtn").disabled = true;
+    try {
+      const { id } = await (await fetch("/api/room", { method: "POST" })).json();
+      await openSocket(id, "host");
+      $("#link").textContent = `${location.origin}/?r=${id}`;
+      $("#room").hidden = false;
+      status("Waiting for the other device…");
+    } catch (err) {
+      status("Could not start: " + (err.message || err), "bad");
+      $("#startBtn").disabled = false;
+    }
+  };
+} else {
+  status("Joining the room…");
+  openSocket(roomId, "guest").catch((err) => status(err.message, "bad"));
+}
+</script>
+</body>
+</html>

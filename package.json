@@ -1,0 +1,16 @@
+{
+  "name": "lanet",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --ip 0.0.0.0 --port 8787",
+    "check": "tsc -p worker/tsconfig.json",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261013.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.150.0"
+  }
+}
