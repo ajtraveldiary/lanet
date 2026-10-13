@@ -1,4 +1,33 @@
+# Dependencies and build output
 node_modules/
-.wrangler/
-.dev.vars
 dist/
+.wrangler/
+
+# Secrets: never commit these. Cloudflare secrets go in with `npx wrangler secret put NAME`.
+.env
+.env.*
+!.env.example
+.dev.vars
+.dev.vars.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+
+# Personal editor and assistant settings
+.claude/settings.local.json
+.vscode/
+.idea/
+
+# Test output and logs
+test-results/
+playwright-report/
+coverage/
+*.log
+npm-debug.log*
+
+# Operating system clutter
+.DS_Store
+Thumbs.db
+desktop.ini
