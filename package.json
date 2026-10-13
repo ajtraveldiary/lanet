@@ -4,13 +4,27 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --ip 0.0.0.0 --port 8787",
-    "check": "tsc -p worker/tsconfig.json",
-    "deploy": "wrangler deploy"
+    "dev": "vite",
+    "check": "tsc -p tsconfig.json && tsc -p worker/tsconfig.json",
+    "build": "npm run check && vite build",
+    "preview": "vite preview",
+    "deploy": "npm run build && wrangler deploy"
   },
   "devDependencies": {
+    "@cloudflare/vite-plugin": "^1.63.2",
     "@cloudflare/workers-types": "^5.20261013.1",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
+    "vite": "^8.3.4",
     "wrangler": "^4.150.0"
+  },
+  "dependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "uqr": "^0.1.3"
   }
 }

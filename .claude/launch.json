@@ -5,7 +5,13 @@
       "name": "lanet-dev",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
-      "port": 8787
+      "port": 5173
+    },
+    {
+      "name": "lanet-preview",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "preview"],
+      "port": 4173
     }
   ]
 }
