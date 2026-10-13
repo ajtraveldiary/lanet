@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face {
+    font-family: "Jakarta";
+    src: url("../node_modules/@fontsource-variable/plus-jakarta-sans/files/plus-jakarta-sans-latin-wght-normal.woff2") format("woff2");
+    font-weight: 200 800;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    font-family: "Jakarta", sans-serif;
+    color: #1b1a2e;
+    background:
+      radial-gradient(700px 500px at 0% 0%, rgba(20,168,160,0.20), transparent 65%),
+      radial-gradient(800px 600px at 100% 20%, rgba(91,61,245,0.22), transparent 62%),
+      #f4f5fb;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 80px;
+  }
+  .left { width: 600px; }
+  .brand { display: flex; align-items: center; gap: 18px; margin-bottom: 44px; }
+  .brand svg { width: 76px; height: 76px; }
+  .brand span { font-size: 54px; font-weight: 800; letter-spacing: -1.5px; }
+  h1 { font-size: 66px; line-height: 1.04; font-weight: 800; letter-spacing: -2px; margin-bottom: 26px; }
+  h1 em { font-style: normal; color: #5b3df5; }
+  p { font-size: 28px; line-height: 1.4; color: #5a5f75; font-weight: 500; }
+  .chips { display: flex; gap: 12px; margin-top: 34px; }
+  .chip { font-size: 22px; font-weight: 700; padding: 10px 18px; border-radius: 999px; background: #e2f7f5; color: #0f8b84; }
+  .chip.v { background: #eeebff; color: #5b3df5; }
+  .card {
+    width: 400px; height: 440px; border-radius: 44px; background: #fff;
+    box-shadow: 0 2px 4px rgba(27,26,46,0.05), 0 30px 60px rgba(40,30,120,0.14);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 22px;
+  }
+  .ring { position: relative; width: 250px; height: 250px; }
+  .ring > svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .inner { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+  .devices { display: flex; align-items: center; gap: 10px; }
+  .tile { width: 62px; height: 62px; border-radius: 20px; background: #eeebff; color: #5b3df5; display: flex; align-items: center; justify-content: center; }
+  .tile svg { width: 34px; height: 34px; }
+  .arrow { width: 34px; height: 34px; border-radius: 50%; background: #e2f7f5; color: #14a8a0; display: flex; align-items: center; justify-content: center; }
+  .pct { font-size: 46px; font-weight: 800; }
+  .label { font-size: 22px; font-weight: 700; color: #1b1a2e; }
+  .stats { display: flex; gap: 26px; font-size: 18px; color: #6f7489; }
+  .stats b { display: block; color: #1b1a2e; font-size: 20px; }
+</style>
+</head>
+<body>
+  <div class="left">
+    <div class="brand">
+      <svg viewBox="0 0 32 32"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6a4dff"/><stop offset="1" stop-color="#4a2fe0"/></linearGradient></defs><rect width="32" height="32" rx="9" fill="url(#g)"/><circle cx="10" cy="16" r="3.4" fill="#fff"/><circle cx="22" cy="10" r="2.9" fill="#fff"/><circle cx="22" cy="22" r="2.9" fill="#3dd6cc"/><path d="M13 14.6 19.4 11.2M13 17.4l6.4 3.4" stroke="#fff" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>lanet</span>
+    </div>
+    <h1>Share files<br>on <em>your Wi-Fi</em></h1>
+    <p>Phone, tablet or computer. Files, folders and text go straight from device to device.</p>
+    <div class="chips"><span class="chip">No uploads</span><span class="chip v">Nothing to install</span><span class="chip">Up to 20 GB</span></div>
+  </div>
+  <div class="card">
+    <div class="ring">
+      <svg viewBox="0 0 250 250"><circle cx="125" cy="125" r="115" fill="none" stroke="#eaecf3" stroke-width="12"/><circle cx="125" cy="125" r="115" fill="none" stroke="#14a8a0" stroke-width="12" stroke-linecap="round" stroke-dasharray="722.6" stroke-dashoffset="202"/></svg>
+      <div class="inner">
+        <div class="devices">
+          <span class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 2.5h8a2 2 0 0 1 2 2v15a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-15a2 2 0 0 1 2-2Z"/><path d="M11 18.5h2"/></svg></span>
+          <span class="arrow"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="m13 6 6 6-6 6"/></svg></span>
+          <span class="tile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 5h12a1.5 1.5 0 0 1 1.5 1.5V15h-15V6.5A1.5 1.5 0 0 1 6 5Z"/><path d="M2.5 18.5h19"/></svg></span>
+        </div>
+        <span class="pct">72%</span>
+      </div>
+    </div>
+    <span class="label">Receiving from Phone</span>
+    <div class="stats"><span>Files<b>8 of 12</b></span><span>Size<b>2.4 GB</b></span><span>Speed<b>24 MB/s</b></span></div>
+  </div>
+</body>
+</html>

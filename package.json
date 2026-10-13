@@ -9,7 +9,8 @@
     "test": "npm run build && playwright test",
     "build": "npm run check && vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "share-images": "node scripts/share-images.cjs"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.63.2",
