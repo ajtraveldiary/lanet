@@ -86,7 +86,7 @@ function Bubble({ m }: { m: ChatMsg }) {
       <div className="flex items-center gap-2 text-xs text-muted">
         <span>{new Date(m.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>
         {m.mine && <span>{m.delivered ? "Delivered" : "Sending…"}</span>}
-        <button type="button" onClick={copy} className="min-h-8 cursor-pointer rounded-md px-2 underline-offset-2 hover:underline">
+        <button type="button" onClick={copy} className="min-h-11 cursor-pointer rounded-md px-3 underline-offset-2 hover:underline">
           {copied ? "Copied ✓" : "Copy"}
         </button>
       </div>

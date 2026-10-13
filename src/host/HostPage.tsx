@@ -2,11 +2,14 @@ import { useState } from "react";
 import { BLOCKED_HELP, Button, Card, LinkPill, Note } from "../ui";
 import { Qr } from "../Qr";
 import { Conversation } from "../Conversation";
+import { FilesPanel } from "../Files";
 import { roomLink } from "../lib/room";
+import { useBusyGuard } from "../lib/guard";
 import { useHostRoom, type Guest } from "./useHostRoom";
 
 export function HostPage() {
   const host = useHostRoom();
+  useBusyGuard(host.busy);
   if (!host.room) return <Home starting={host.starting} ended={host.ended} onStart={host.start} />;
   return <Room {...host} room={host.room} />;
 }
@@ -98,9 +101,14 @@ function Room({ room, status, guests, selected, notice, locked, close, select, s
         )}
       </Card>
 
+      {open && open.link === "blocked" && <Note tone="bad">{BLOCKED_HELP}</Note>}
+      {open && (
+        <Card title={`Files with ${open.name}`}>
+          <FilesPanel key={open.id} transfers={open.transfers} otherName={open.name} canSend={open.link === "connected"} />
+        </Card>
+      )}
       {open && (
         <Card title={`Text with ${open.name}`}>
-          {open.link === "blocked" && <div className="mb-3"><Note tone="bad">{BLOCKED_HELP}</Note></div>}
           <Conversation
             key={open.id}
             messages={open.messages}

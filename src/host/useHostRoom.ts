@@ -3,8 +3,9 @@ import { closeMessage, createRoom, newPin, readSession, retryDelay, roomSocket, 
 import { deviceName } from "../lib/device";
 import { PeerLink, type LinkState, type Signal } from "../lib/peer";
 import { applyChat, newText, readChat, type ChatMsg } from "../lib/chat";
+import { Transfers } from "../lib/transfers";
 
-export type Guest = { id: string; name: string; link: LinkState; messages: ChatMsg[]; unread: number };
+export type Guest = { id: string; name: string; link: LinkState; messages: ChatMsg[]; unread: number; transfers: Transfers };
 type Saved = { id: string; token: string; pin: string };
 
 // Kept for this tab only, so a reload goes back into the same room with the same PIN.
@@ -14,8 +15,6 @@ function loadSaved(): Saved | null {
   const s = readSession<Saved>(KEY);
   return s && typeof s.id === "string" && typeof s.token === "string" && /^\d{6}$/.test(String(s.pin)) ? s : null;
 }
-
-const freshGuest = (id: string, name: string): Guest => ({ id, name, link: "connecting", messages: [], unread: 0 });
 
 // Two phones of the same kind would otherwise look the same in the list.
 function uniqueName(list: Guest[], name: string): string {
@@ -37,12 +36,30 @@ export function useHostRoom() {
   const [starting, setStarting] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const peers = useRef(new Map<string, PeerLink>());
-  // Socket and connection handlers outlive renders, so they read the open conversation from here.
+  // Socket and connection handlers outlive renders, so they read the device list and the open
+  // conversation from refs. The list ref is the one source; the state copy only redraws the page.
+  const guestsRef = useRef<Guest[]>([]);
   const selectedRef = useRef<string | null>(null);
 
-  const patch = useCallback((id: string, fn: (g: Guest) => Guest) => {
-    setGuests((list) => list.map((g) => (g.id === id ? fn(g) : g)));
+  const updateGuests = useCallback((fn: (list: Guest[]) => Guest[]) => {
+    guestsRef.current = fn(guestsRef.current);
+    setGuests(guestsRef.current);
   }, []);
+  const patch = useCallback((id: string, fn: (g: Guest) => Guest) => {
+    updateGuests((list) => list.map((g) => (g.id === id ? fn(g) : g)));
+  }, [updateGuests]);
+  const guest = (id: string) => guestsRef.current.find((g) => g.id === id);
+
+  // File progress changes many times a second; the page is redrawn at most a few times a second.
+  const [, setTick] = useState(0);
+  const tickTimer = useRef(0);
+  const redraw = useCallback(() => {
+    if (tickTimer.current) return;
+    tickTimer.current = window.setTimeout(() => { tickTimer.current = 0; setTick((t) => t + 1); }, 150);
+  }, []);
+  const newGuest = useCallback((id: string, name: string): Guest => (
+    { id, name, link: "connecting", messages: [], unread: 0, transfers: new Transfers(redraw) }
+  ), [redraw]);
 
   const select = useCallback((id: string | null) => {
     selectedRef.current = id;
@@ -50,20 +67,31 @@ export function useHostRoom() {
     if (id) patch(id, (g) => ({ ...g, unread: 0 }));
   }, [patch]);
 
-  const dropPeer = (id: string) => {
+  const dropPeer = useCallback((id: string) => {
     peers.current.get(id)?.close();
     peers.current.delete(id);
-  };
+    guest(id)?.transfers.detach("The connection dropped");
+  }, []);
 
   const makePeer = useCallback((id: string) => {
+    const current = () => peers.current.get(id) === peer;
     const peer: PeerLink = new PeerLink({
       offerer: false,
       signal: (s: Signal) => {
         const ws = wsRef.current;
         if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "signal", to: id, data: s }));
       },
-      onState: (link) => patch(id, (g) => ({ ...g, link })),
+      onState: (link) => {
+        patch(id, (g) => ({ ...g, link }));
+        if (link === "connected" && current()) guest(id)?.transfers.attach(peer);
+      },
+      onChannel: (ch) => {
+        const g = guest(id);
+        if (g && current()) g.transfers.channel(ch);
+        else ch.close();
+      },
       onMessage: (m) => {
+        if (guest(id)?.transfers.handle(m)) return;
         const ev = readChat(m, (r) => peer.send(r));
         if (!ev) return;
         patch(id, (g) => ({
@@ -97,8 +125,8 @@ export function useHostRoom() {
           for (const x of list) {
             if (peers.current.get(x.id)?.state !== "connected") ws.send(JSON.stringify({ type: "signal", to: x.id, data: { restart: true } }));
           }
-          setGuests((old) => list.reduce<Guest[]>((acc, x) => {
-            acc.push(old.find((g) => g.id === x.id) ?? freshGuest(x.id, uniqueName(acc, x.name)));
+          updateGuests((old) => list.reduce<Guest[]>((acc, x) => {
+            acc.push(old.find((g) => g.id === x.id) ?? newGuest(x.id, uniqueName(acc, x.name)));
             return acc;
           }, []));
         } else if (m.type === "knock") {
@@ -106,9 +134,9 @@ export function useHostRoom() {
           const ok = m.pin === room.pin;
           ws.send(JSON.stringify({ type: "admit", to: m.from, ok }));
           if (ok) {
-            setGuests((g) => {
-              const rest = g.filter((x) => x.id !== m.from);
-              return [...rest, freshGuest(m.from, uniqueName(rest, String(m.name)))];
+            updateGuests((list) => {
+              const rest = list.filter((x) => x.id !== m.from);
+              return [...rest, newGuest(m.from, uniqueName(rest, String(m.name)))];
             });
           } else {
             setNotice(`${m.name} typed a wrong PIN.`);
@@ -125,7 +153,7 @@ export function useHostRoom() {
           }
         } else if (m.type === "left") {
           dropPeer(m.from);
-          setGuests((g) => g.filter((x) => x.id !== m.from));
+          updateGuests((list) => list.filter((x) => x.id !== m.from));
           if (selectedRef.current === m.from) select(null);
         } else if (m.type === "locked") {
           setLocked(true);
@@ -154,8 +182,9 @@ export function useHostRoom() {
       wsRef.current = null;
       for (const p of all.values()) p.close();
       all.clear();
+      for (const g of guestsRef.current) g.transfers.detach("The room closed");
     };
-  }, [room, makePeer, patch, select]);
+  }, [room, makePeer, patch, select, updateGuests, newGuest, dropPeer]);
 
   // A device that has left takes its conversation with it; pick another one to show.
   useEffect(() => {
@@ -168,7 +197,7 @@ export function useHostRoom() {
     try {
       const saved = { ...(await createRoom()), pin: newPin() };
       writeSession(KEY, saved);
-      setGuests([]);
+      updateGuests(() => []);
       setNotice(null);
       setLocked(false);
       select(null);
@@ -178,17 +207,17 @@ export function useHostRoom() {
     } finally {
       setStarting(false);
     }
-  }, [select]);
+  }, [select, updateGuests]);
 
   const close = useCallback(() => {
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "close" }));
     writeSession(KEY, null);
-    setGuests([]);
+    updateGuests(() => []);
     setNotice(null);
     select(null);
     setRoom(null);
-  }, [select]);
+  }, [select, updateGuests]);
 
   const sendText = useCallback((id: string, body: string) => {
     const peer = peers.current.get(id);
@@ -198,8 +227,10 @@ export function useHostRoom() {
     return true;
   }, [patch]);
 
+  const busy = guests.some((g) => g.transfers.batches.some((b) => b.state === "active"));
+
   return {
-    room, status, guests, selected, notice, locked, ended, starting,
+    room, status, guests, selected, notice, locked, ended, starting, busy,
     start, close, select, sendText, dismissNotice: () => setNotice(null),
   };
 }

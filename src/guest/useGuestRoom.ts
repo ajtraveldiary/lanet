@@ -3,6 +3,7 @@ import { closeMessage, readSession, retryDelay, roomSocket, writeSession } from 
 import { deviceName } from "../lib/device";
 import { PeerLink, type LinkState, type Signal } from "../lib/peer";
 import { applyChat, newText, readChat, type ChatMsg } from "../lib/chat";
+import { Transfers } from "../lib/transfers";
 
 export type GuestPhase = "pin" | "checking" | "waiting" | "in" | "ended";
 
@@ -38,6 +39,14 @@ export function useGuestRoom(roomId: string) {
   const joinPending = useRef(false);
   const restartTimer = useRef(0);
 
+  // File progress changes many times a second; the page is redrawn at most a few times a second.
+  const [, setTick] = useState(0);
+  const tickTimer = useRef(0);
+  const [transfers] = useState(() => new Transfers(() => {
+    if (tickTimer.current) return;
+    tickTimer.current = window.setTimeout(() => { tickTimer.current = 0; setTick((t) => t + 1); }, 150);
+  }));
+
   const join = useCallback(() => {
     const ws = wsRef.current;
     if (pinRef.current && ws?.readyState === WebSocket.OPEN) {
@@ -49,6 +58,7 @@ export function useGuestRoom(roomId: string) {
   const startPeer = useCallback(() => {
     clearTimeout(restartTimer.current);
     peerRef.current?.close();
+    transfers.detach("The connection dropped");
     setLink("connecting");
     const peer: PeerLink = new PeerLink({
       offerer: true,
@@ -58,6 +68,7 @@ export function useGuestRoom(roomId: string) {
       },
       onState: (s) => {
         setLink(s);
+        if (s === "connected" && peerRef.current === peer) transfers.attach(peer);
         clearTimeout(restartTimer.current);
         if (s === "reconnecting") {
           restartTimer.current = window.setTimeout(() => {
@@ -66,13 +77,18 @@ export function useGuestRoom(roomId: string) {
           }, RESTART_AFTER);
         }
       },
+      onChannel: (ch) => {
+        if (peerRef.current === peer) transfers.channel(ch);
+        else ch.close();
+      },
       onMessage: (m) => {
+        if (transfers.handle(m)) return;
         const ev = readChat(m, (r) => peer.send(r));
         if (ev) setMessages((list) => applyChat(list, ev));
       },
     });
     peerRef.current = peer;
-  }, []);
+  }, [transfers]);
 
   useEffect(() => {
     let stopped = false, tries = 0, timer = 0;
@@ -124,6 +140,7 @@ export function useGuestRoom(roomId: string) {
         if (final) {
           writeSession(keyFor(roomId), null);
           peerRef.current?.close();
+          transfers.detach("The room closed");
           setWasIn(phaseRef.current === "in");
           setMessage(final);
           setPhase("ended");
@@ -145,7 +162,7 @@ export function useGuestRoom(roomId: string) {
       peerRef.current?.close();
       peerRef.current = null;
     };
-  }, [roomId, join, setPhase, setHostAway, startPeer]);
+  }, [roomId, join, setPhase, setHostAway, startPeer, transfers]);
 
   const submitPin = useCallback((pin: string) => {
     pinRef.current = pin;
@@ -160,5 +177,7 @@ export function useGuestRoom(roomId: string) {
     return true;
   }, []);
 
-  return { phase, triesLeft, hostName, hostAway, reconnecting, message, wasIn, link, messages, submitPin, sendText, retry: startPeer };
+  const busy = transfers.batches.some((b) => b.state === "active");
+
+  return { phase, triesLeft, hostName, hostAway, reconnecting, message, wasIn, link, messages, transfers, busy, submitPin, sendText, retry: startPeer };
 }

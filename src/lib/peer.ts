@@ -20,7 +20,10 @@ type Options = {
   signal: (s: Signal) => void;
   onState: (s: LinkState) => void;
   onMessage: (m: Record<string, unknown>) => void;
+  onChannel: (ch: RTCDataChannel) => void;  // any channel other than the control one (one per file)
 };
+
+const MAX_PIECE = 256 * 1024;
 
 export class PeerLink {
   state: LinkState = "connecting";
@@ -42,14 +45,16 @@ export class PeerLink {
       if (s === "failed") this.set(this.state === "connecting" ? "blocked" : "reconnecting");
       else if (s === "disconnected" && this.state === "connected") this.set("reconnecting");
     };
+    this.pc.ondatachannel = (e) => {
+      if (e.channel.label === "ctl") { if (!o.offerer) this.useChannel(e.channel); }
+      else o.onChannel(e.channel);
+    };
     if (o.offerer) {
       this.useChannel(this.pc.createDataChannel("ctl", { ordered: true }));
       this.steps = this.steps.then(async () => {
         await this.pc.setLocalDescription(await this.pc.createOffer());
         o.signal({ sdp: this.pc.localDescription!.toJSON() });
       }).catch(() => this.set("blocked"));
-    } else {
-      this.pc.ondatachannel = (e) => { if (e.channel.label === "ctl") this.useChannel(e.channel); };
     }
     this.timer = window.setTimeout(() => { if (this.state === "connecting") this.set("blocked"); }, CONNECT_TIMEOUT);
   }
@@ -81,6 +86,16 @@ export class PeerLink {
       for (let i = 0; i < n; i++) ch.send(JSON.stringify({ t: "part", id, i, n, s: text.slice(i * PART, (i + 1) * PART) }));
     }
     return true;
+  }
+
+  openChannel(label: string): RTCDataChannel {
+    return this.pc.createDataChannel(label, { ordered: true });
+  }
+
+  // The biggest piece both browsers accept in one message (they agree on it while connecting).
+  get chunkSize(): number {
+    const max = this.pc.sctp?.maxMessageSize;
+    return Math.min(max && max > 0 ? max : 64 * 1024, MAX_PIECE);
   }
 
   close() {

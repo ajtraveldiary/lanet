@@ -1,10 +1,13 @@
 import { useState, type FormEvent } from "react";
 import { BLOCKED_HELP, Button, Card, LinkPill, Note } from "../ui";
 import { Conversation } from "../Conversation";
+import { FilesPanel } from "../Files";
+import { useBusyGuard } from "../lib/guard";
 import { useGuestRoom } from "./useGuestRoom";
 
 export function GuestPage({ roomId }: { roomId: string }) {
   const g = useGuestRoom(roomId);
+  useBusyGuard(g.busy);
 
   if (g.phase === "ended") {
     return (
@@ -33,6 +36,9 @@ export function GuestPage({ roomId }: { roomId: string }) {
           ) : g.reconnecting ? (
             <div className="mt-3"><Note tone="warn">Can't reach the room right now. Trying again…</Note></div>
           ) : null}
+        </Card>
+        <Card title="Files">
+          <FilesPanel transfers={g.transfers} otherName={g.hostName || "The main device"} canSend={g.link === "connected"} />
         </Card>
         <Card title={`Text with ${g.hostName || "the main device"}`}>
           <Conversation messages={g.messages} canSend={g.link === "connected"} onSend={g.sendText} otherName={g.hostName} />
