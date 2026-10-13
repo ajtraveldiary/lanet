@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Button, Card, Note } from "../ui";
+import { BLOCKED_HELP, Button, Card, LinkPill, Note } from "../ui";
 import { Qr } from "../Qr";
+import { Conversation } from "../Conversation";
 import { roomLink } from "../lib/room";
 import { useHostRoom, type Guest } from "./useHostRoom";
 
@@ -39,8 +40,9 @@ function Home({ starting, ended, onStart }: { starting: boolean; ended: string |
 
 type RoomProps = ReturnType<typeof useHostRoom> & { room: NonNullable<ReturnType<typeof useHostRoom>["room"]> };
 
-function Room({ room, status, guests, notice, locked, close, dismissNotice }: RoomProps) {
+function Room({ room, status, guests, selected, notice, locked, close, select, sendText, dismissNotice }: RoomProps) {
   const link = roomLink(room.id);
+  const open = guests.find((g) => g.id === selected) ?? null;
   const onLocalhost = ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
   return (
     <>
@@ -91,10 +93,23 @@ function Room({ room, status, guests, notice, locked, close, dismissNotice }: Ro
             <Button className="min-w-11 px-2" aria-label="Dismiss" onClick={dismissNotice}>✕</Button>
           </div>
         )}
-        {guests.length ? <GuestList guests={guests} /> : (
+        {guests.length ? <GuestList guests={guests} selected={selected} onSelect={select} /> : (
           <p className="text-muted">No devices yet. They appear here once they type the PIN.</p>
         )}
       </Card>
+
+      {open && (
+        <Card title={`Text with ${open.name}`}>
+          {open.link === "blocked" && <div className="mb-3"><Note tone="bad">{BLOCKED_HELP}</Note></div>}
+          <Conversation
+            key={open.id}
+            messages={open.messages}
+            canSend={open.link === "connected"}
+            onSend={(body) => sendText(open.id, body)}
+            otherName={open.name}
+          />
+        </Card>
+      )}
 
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-sm text-muted">Keep this page open. The room closes 2 minutes after it's closed.</p>
@@ -104,14 +119,24 @@ function Room({ room, status, guests, notice, locked, close, dismissNotice }: Ro
   );
 }
 
-function GuestList({ guests }: { guests: Guest[] }) {
+// Picking a device opens its conversation below the list.
+function GuestList({ guests, selected, onSelect }: { guests: Guest[]; selected: string | null; onSelect: (id: string) => void }) {
   return (
-    <ul className="divide-y divide-line">
+    <ul className="flex flex-col gap-1">
       {guests.map((g) => (
-        <li key={g.id} className="flex items-center gap-3 py-2">
-          <span className="size-2.5 shrink-0 rounded-full bg-accent" aria-hidden />
-          <span className="min-w-0 flex-1 truncate">{g.name}</span>
-          <span className="text-sm text-muted">Joined</span>
+        <li key={g.id}>
+          <button
+            type="button"
+            onClick={() => onSelect(g.id)}
+            aria-current={g.id === selected}
+            className={`flex min-h-11 w-full cursor-pointer flex-wrap items-center gap-x-3 gap-y-1 rounded-xl px-3 py-2 text-left ${g.id === selected ? "bg-accent-soft" : "hover:bg-accent-soft/60"}`}
+          >
+            <span className="min-w-32 flex-1 break-words">{g.name}</span>
+            {g.unread > 0 && (
+              <span className="rounded-full bg-accent px-2 text-xs font-semibold text-on-accent" aria-label={`${g.unread} new`}>{g.unread}</span>
+            )}
+            <LinkPill link={g.link} />
+          </button>
         </li>
       ))}
     </ul>

@@ -38,6 +38,22 @@ export function Button({ kind = "secondary", className = "", ...rest }: ButtonHT
   );
 }
 
+const LINK_TEXT = {
+  connecting: "Connecting directly…",
+  connected: "Connected directly",
+  reconnecting: "Reconnecting…",
+  blocked: "Can't connect directly",
+} as const;
+
+export function LinkPill({ link }: { link: keyof typeof LINK_TEXT }) {
+  const look = link === "connected" ? "bg-accent-soft text-ink" : link === "blocked" ? "bg-bad-soft text-bad" : "bg-warn-soft text-on-warn";
+  return <span className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs ${look}`}>{LINK_TEXT[link]}</span>;
+}
+
+export const BLOCKED_HELP =
+  "The devices found each other but couldn't connect directly. Check both are on the same Wi-Fi. " +
+  "Some Wi-Fi networks (guest, office or hotel Wi-Fi) stop devices from reaching each other; a home Wi-Fi or a phone hotspot works.";
+
 export function Note({ tone = "info", children }: { tone?: "info" | "bad" | "warn"; children: ReactNode }) {
   const look = tone === "bad" ? "bg-bad-soft text-bad" : tone === "warn" ? "bg-warn-soft text-on-warn" : "bg-accent-soft text-ink";
   return <p role={tone === "info" ? "status" : "alert"} className={`rounded-xl px-3 py-2 text-sm ${look}`}>{children}</p>;

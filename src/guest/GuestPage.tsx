@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from "react";
-import { Button, Card, Note } from "../ui";
+import { BLOCKED_HELP, Button, Card, LinkPill, Note } from "../ui";
+import { Conversation } from "../Conversation";
 import { useGuestRoom } from "./useGuestRoom";
 
 export function GuestPage({ roomId }: { roomId: string }) {
@@ -16,12 +17,27 @@ export function GuestPage({ roomId }: { roomId: string }) {
 
   if (g.phase === "in") {
     return (
-      <Card title="You're in">
-        <p className="mb-3">Connected to <b>{g.hostName}</b>.</p>
-        {g.hostAway && <div className="mb-3"><Note tone="warn">The main device is away. This page will reconnect when it's back.</Note></div>}
-        {g.reconnecting && <div className="mb-3"><Note tone="warn">Reconnecting…</Note></div>}
-        <p className="text-sm text-muted">Sending files and text comes in the next update.</p>
-      </Card>
+      <>
+        <Card>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="min-w-0">Joined <b className="break-words">{g.hostName}</b></p>
+            <LinkPill link={g.link} />
+          </div>
+          {g.hostAway ? (
+            <div className="mt-3"><Note tone="warn">The main device is away. This page will reconnect when it's back.</Note></div>
+          ) : g.link === "blocked" ? (
+            <div className="mt-3 space-y-3">
+              <Note tone="bad">{BLOCKED_HELP}</Note>
+              <Button onClick={g.retry}>Try again</Button>
+            </div>
+          ) : g.reconnecting ? (
+            <div className="mt-3"><Note tone="warn">Can't reach the room right now. Trying again…</Note></div>
+          ) : null}
+        </Card>
+        <Card title={`Text with ${g.hostName || "the main device"}`}>
+          <Conversation messages={g.messages} canSend={g.link === "connected"} onSend={g.sendText} otherName={g.hostName} />
+        </Card>
+      </>
     );
   }
 
