@@ -28,6 +28,23 @@ npm run preview    # serve the built app on :4173 (localhost and the Wi-Fi addre
 npm run deploy     # build, then publish to Cloudflare (the user runs this, never the agent)
 ```
 
+## How the user wants to work
+
+These come from the user's own instructions in the conversation that started this project.
+
+- **Check first, then ask, then plan, then confirm.** For a new idea: first check whether it is technically possible and say plainly what can't be done. Then ask questions until everything is clear (multiple-choice questions with a recommended option have worked well). Then write the plan. Start nothing until the user approves it.
+- **One step at a time.** The work follows the numbered plan below. Do one step, test it, report, then stop. The next step starts only when the user says so ("go").
+- **Lanet has nothing to do with any other project.** In particular, don't look at, copy from or take ideas from *eOffice Assist* (another project in `C:\Users\media\Desktop\`), not even its package versions. Design everything for Lanet on its own.
+- **The user runs git and deploy commands.** Give each command in its own `bash` block; never join them with `&&`; never add `Co-Authored-By` or other attribution lines.
+- **When an answer is unclear, ask** rather than guess (for example, a one-line reply that could mean two things).
+- **Questions asked only "for information"** (like "is any device to any device possible?") get an answer, not a feature. Don't build it unless the user asks.
+
+## The project's home
+
+- Folder: `C:\Users\media\Desktop\lanet`
+- GitHub: https://github.com/ajtraveldiary/lanet (public, branch `main`). The user created it and pushes to it.
+- Hosting: Cloudflare Workers, at `lanet.<subdomain>.workers.dev` once deployed (not deployed yet).
+
 ## Rules for every change
 
 1. **Never remove or change a confirmed feature without asking.** Anything the user asked for, suggested, or approved in a plan stays exactly as agreed: a feature, a behaviour, a wording, a layout, a limit. Don't change it back, "simplify" it away, or swap it for something else while working on another task. If a change would touch it, stop and ask first. If two earlier requests conflict, ask which one wins. The list below under "Decisions the user has confirmed" is the record; add to it when the user confirms something new.
@@ -57,9 +74,10 @@ npm run deploy     # build, then publish to Cloudflare (the user runs this, neve
 
 These were asked for or approved by the user. Keep them unless the user changes them.
 
-- A Cloudflare Worker web app. A page can't start a local server, so the agreed design is: Worker + Durable Object to introduce devices, WebRTC for the transfer itself.
-- A separate project, unrelated to any other project. Don't copy from or refer to other projects.
-- Name: **Lanet**. English-only screens.
+- **The original request:** a Cloudflare Worker web app with a button that "starts a server" and gives a local link; devices on the same network open it and send files to and receive files from the original device.
+- **What was agreed instead, and why:** a web page can't start a server or listen on the local network, so a literal local link is impossible from a browser. The user chose: Worker + Durable Object to introduce devices, and WebRTC so files still go device to device over the local network. Internet is needed only to connect. (A small desktop program would give a true offline local link; the user didn't choose it.)
+- A separate project in its own folder, unrelated to eOffice Assist or any other project.
+- Name: **Lanet**. The user asked for a made-up word from two words and chose "Lanet". English-only screens.
 - Stack: Vite + React + Tailwind, served by the Worker.
 - Devices send to and receive from **the main device only** (not to each other). Device-to-device is possible later if the user asks.
 - Joining: **link + QR code + 6-digit PIN**, checked by the main device.
@@ -69,19 +87,25 @@ These were asked for or approved by the user. Keep them unless the user changes 
 - Files from **1 KB to 20 GB**, many at once; **folders**; **text and links**.
 - Receiving: Chrome/Edge on a computer save into a folder the user picks; others stream into downloads; iPhone/iPad keep files in the browser, then Save. iPhone/iPad as receiver: **show a warning** for big sends (over 2 GB), don't block.
 - **Resume** a big transfer after a Wi-Fi drop (desktop Chrome/Edge; elsewhere it starts again).
-- Step 0 result: phone ↔ PC connected directly on the user's Wi-Fi, 100 MB arrived complete.
+- Folders: kept as folders on Chrome/Edge desktop; arrive as one `.zip` elsewhere (step 4).
+- Sending: the receiver sees names and sizes and taps **Accept** or **Decline**; nothing moves before that. Both sides can cancel.
+- Repeated device names get a number ("Android phone · Chrome (2)").
+- Text messages live only in the open page (a reload clears that page's copy); nothing is stored on the device or the server.
+- The project keeps a `CLAUDE.md` with these rules and safeguards, a `README.md`, and a `.gitignore` that keeps `.env` files, `.dev.vars`, keys and other secrets out of GitHub.
 
 ## Plan and progress
 
-0. Connection test — done, passed on the user's phone.
+0. Connection test — done. On the user's Wi-Fi, phone ↔ PC connected directly; 100 MB arrived complete at 4.6 MB/s.
 1. Rooms, PIN, QR code, React app — done.
-2. Direct connection, text and links — done, tested on the user's phone.
-3. Files with progress, cancel, the four ways of saving — done.
+2. Direct connection, text and links — done. The user confirmed messages went both ways on their phone.
+3. Files with progress, cancel, the four ways of saving — done and tested in two tabs on the PC (512 MB at about 28 MB/s, byte for byte correct). **Not yet tried on the user's phone.** The `download` way of saving is untested, because that test starts a real download.
 4. Folders, zip fallback — next.
-5. Resume after a dropped connection.
+5. Resume after a dropped connection (needs a stable device identity across rejoins).
 6. Screens polish, plain error messages.
 7. Automated tests (Playwright, two browser contexts) and a real-device check.
-8. Deploy (the user runs `npm run deploy`).
+8. Deploy (the user runs `npx wrangler login`, then `npm run deploy`).
+
+**Open question to the user:** put the https site online before step 4, so big files can be tested on a phone (plain http on the Wi-Fi address limits receiving to 500 MB), or go straight to step 4?
 
 ## Architecture in one screen
 
