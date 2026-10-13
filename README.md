@@ -58,6 +58,20 @@ npm run preview
 
 On a plain `http://192.168.…` address, browsers turn off the features big files need. Receiving is then limited to 500 MB at a time. Use `http://localhost` on the computer, or the deployed https site, to try big files.
 
+## Tests
+
+The first time, download the test browser:
+
+```bash
+npx playwright install chromium
+```
+
+Then build and run all tests. Each test opens two browser windows that join, send text and files, and drop and resume:
+
+```bash
+npm test
+```
+
 ## Deploying to Cloudflare
 
 You need a Cloudflare account; the free plan is enough.

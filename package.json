@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "check": "tsc -p tsconfig.json && tsc -p worker/tsconfig.json",
+    "check": "tsc -p tsconfig.json && tsc -p worker/tsconfig.json && tsc -p tests/tsconfig.json",
+    "test": "npm run build && playwright test",
     "build": "npm run check && vite build",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler deploy"
@@ -13,6 +14,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.63.2",
     "@cloudflare/workers-types": "^5.20261013.1",
+    "@playwright/test": "^1.64.0",
     "@tailwindcss/vite": "^4.3.3",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

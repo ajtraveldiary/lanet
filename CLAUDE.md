@@ -25,6 +25,10 @@ npm run preview    # serve the built app on :4173 (localhost and the Wi-Fi addre
 ```
 
 ```bash
+npm test           # build, start the built app on :4174, run the Playwright tests in tests/ (first time: npx playwright install chromium)
+```
+
+```bash
 npm run deploy     # build, then publish to Cloudflare (the user runs this, never the agent)
 ```
 
@@ -51,7 +55,7 @@ These come from the user's own instructions in the conversation that started thi
 2. **Ask before starting.** When the user asks for a plan or suggestions, change nothing until they approve. Ask questions before planning when anything is unclear. Work in the agreed steps and stop after each step to report.
 3. **Minimal changes.** Edit only what the request needs. No drive-by refactors, renames or tidying. Mention anything else you notice; don't do it.
 4. **Be honest about limits.** If something can't be done (or can't be done in a browser), say so plainly and offer the closest thing that can. Never claim something works without having tested it; say what was and wasn't tested.
-5. **Test in a real browser before saying it works.** `npm run build`, then `npm run preview`, and drive the real screens with two tabs (one main device, one guest). Type-checking is not a test. Check the odd cases too: wrong PIN, a reload on either side, cancel mid-transfer, an empty file, a hostile file name or text.
+5. **Test in a real browser before saying it works.** Run `npm test` (all of it must pass), and for anything on screen also drive the real screens with `npm run preview` and two tabs (one main device, one guest). Type-checking is not a test. A new feature or fixed bug gets a test in `tests/`. Check the odd cases too: wrong PIN, a reload on either side, cancel mid-transfer, an empty file, a hostile file name or text.
 6. **Every change works on a phone, a tablet and a desktop.** One app that narrows. Check at 320, 360, 768 and 1280 px: no sideways page scrolling, nothing overlapping, buttons at least 44 px tall, dark mode readable.
 7. **Plain English in the app.** Short sentences, no jargon. Error messages say what happened and what to do next.
 8. **Comments say why, not what.** Match the density and style of the file you're in.
@@ -103,7 +107,7 @@ These were asked for or approved by the user. Keep them unless the user changes 
 4. Folders, zip fallback — done and tested in two tabs on the PC. Details chosen in this step (not separately asked): empty folders aren't sent (the browser's folder picker doesn't list them); at most 10,000 files per send; the `.zip` is not compressed (fast, and photos and videos don't shrink); a top-level folder whose name is taken is saved as "Name (2)" as a whole; the zip uses the `client-zip` library (MIT, no dependencies).
 5. Resume after a dropped connection — done and tested in two tabs on the PC. What was built: each joining device has its own key, so a rejoining device keeps its place, conversation and transfers on the main device. A dropped connection **pauses** a transfer, and it carries on from the exact byte when the connection is back. This works on every browser, as long as both pages stay open. If the *sending* page was reloaded, picking the same files again carries on from where it stopped. If the *receiving* page is closed or reloaded, the half-received data is gone (browsers discard it) and the transfer has to start again. The sender is told so. The user confirmed this ("keep it as built"), in place of the original "desktop Chrome/Edge; elsewhere it starts again".
 6. Screens polish — done and tested in two tabs on the PC (320, 360, 768 and 1280 px; light and dark). New look per the user's choices above, in `src/styles.css` (theme), `src/ui.tsx` (cards, buttons, ring, tab bar), `src/icons.tsx` (hand-drawn icons, device and file kinds). Font: Plus Jakarta Sans, bundled from npm (`@fontsource-variable/plus-jakarta-sans`), never loaded from another site.
-7. Automated tests (Playwright, two browser contexts) and a real-device check.
+7. Automated tests — done: 22 Playwright tests in `tests/`, each with two separate browser windows (main device and guest), all passing. They cover rooms and PINs, the room server's rules, text, files (folder, browser and memory ways of saving), folders and zips, resume (drop, sender reload, receiver reload), and layout at 320–1280 px and dark mode. Every change runs `npm test` before it's reported. Not covered automatically: the `download` way of saving (it starts a real download) and real phones; those need the user's real-device check.
 8. Deploy (the user runs `npx wrangler login`, then `npm run deploy`).
 
 **Open question to the user:** put the https site online before step 4, so big files can be tested on a phone (plain http on the Wi-Fi address limits receiving to 500 MB), or go straight to step 4?
@@ -132,4 +136,5 @@ These were asked for or approved by the user. Keep them unless the user changes 
 - **The service worker only answers `/__download/…`** and must never cache the app.
 - **Restart `npm run preview` after every `npm run build`.** A running preview keeps serving the old page, which points at script files the build replaced, so the page comes up blank with 500 errors.
 - **Testing in the built-in browser pane:** typing doesn't reach some inputs, so set values with the native setter and dispatch an `input` event. Feed files to a file input with a `DataTransfer`. Changing only the `#` part of the address doesn't reload the page. During a transfer the page asks before closing, so navigate with `force`. Starting a real download needs the user's OK first.
+- **Writing tests:** use the helpers in `tests/helpers.ts` (`pair`, `pickFiles`, `accept`, `checkStored`, `checkZip`, `dropConnection`). Make test files inside the page, not with Node's `fs` or `Buffer`; the tests are type-checked with DOM types only (`tests/tsconfig.json`). A page reload during a transfer opens a "Leave site?" dialog, so accept it with `page.on("dialog", d => d.accept())`.
 - **Comments in JSX** placed as the direct child of `return (` before a single root are a syntax error; put them inside the element.
