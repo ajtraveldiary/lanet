@@ -24,6 +24,10 @@ const PATHS = {
   room: ["M12 13.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z", "M8.5 8.5a5 5 0 0 0 0 7", "M15.5 8.5a5 5 0 0 1 0 7", "M5.6 5.6a9 9 0 0 0 0 12.8", "M18.4 5.6a9 9 0 0 1 0 12.8"],
   pause: ["M9 6v12", "M15 6v12"],
   arrow: ["M5 12h14", "m13 6 6 6-6 6"],
+  install: ["M12 3v10", "m8 9 4 4 4-4", "M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3"],
+  // The iPhone share button: a box with an arrow out of the top.
+  iosShare: ["M12 3v12", "m8 7 4-4 4 4", "M8 10H7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7a2 2 0 0 0-2-2h-1"],
+  plusSquare: ["M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Z", "M12 8v8", "M8 12h8"],
 } as const;
 
 export type IconName = keyof typeof PATHS;

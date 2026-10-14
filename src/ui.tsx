@@ -1,14 +1,17 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Icon, deviceIcon, type IconName } from "./icons";
+import { install, useCanInstall } from "./lib/install";
 
 export function Shell({ children }: { children: ReactNode }) {
+  const canInstall = useCanInstall();
   return (
     <div className="mx-auto flex min-h-dvh max-w-6xl flex-col px-4 pb-28 lg:px-8 lg:pb-12">
-      <header className="flex items-center py-5">
+      <header className="flex items-center justify-between gap-3 py-5">
         <a href="/" className="flex items-center gap-2 rounded-lg text-ink no-underline">
           <img src="/icon.svg" alt="" className="size-8" />
           <span className="text-xl font-bold tracking-tight">lanet</span>
         </a>
+        {canInstall && <Button icon="install" onClick={() => void install()}>Install app</Button>}
       </header>
       <main className="flex flex-1 flex-col gap-4">{children}</main>
     </div>

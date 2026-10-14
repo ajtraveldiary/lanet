@@ -4,9 +4,12 @@ import { Icon } from "../icons";
 import { Qr } from "../Qr";
 import { Conversation } from "../Conversation";
 import { FilesPanel } from "../Files";
+import { SharedWaiting, type Target } from "../Shared";
 import { roomLink } from "../lib/room";
 import { deviceName } from "../lib/device";
 import { useBusyGuard } from "../lib/guard";
+import { closeHint, hintClosed, installed } from "../lib/install";
+import { isIOS } from "../lib/files";
 import { useHostRoom, type Guest } from "./useHostRoom";
 
 export function HostPage() {
@@ -25,6 +28,8 @@ const STEPS = [
 function Home({ starting, ended, onStart }: { starting: boolean; ended: string | null; onStart: () => void }) {
   const me = deviceName();
   return (
+    <>
+    <SharedWaiting targets={[]} notReady="Tap Start sharing and let a device join with the PIN; then you can send these to it." />
     <div className="grid gap-4 pt-2 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] lg:items-start lg:pt-8">
       <section className="flex flex-col gap-5 rounded-[2rem] bg-surface p-5 shadow-[var(--shadow-card)] sm:p-8">
         <span className="inline-flex w-fit items-center gap-2 rounded-full bg-teal-soft px-3 py-1 text-xs font-semibold text-teal">
@@ -54,6 +59,7 @@ function Home({ starting, ended, onStart }: { starting: boolean; ended: string |
       </section>
 
       <section aria-labelledby="how" className="flex flex-col gap-3">
+        <IosHint />
         <h2 id="how" className="px-1 text-base font-semibold">How it works</h2>
         <ol className="flex flex-col gap-3">
           {STEPS.map(([title, text], i) => (
@@ -67,6 +73,24 @@ function Home({ starting, ended, onStart }: { starting: boolean; ended: string |
           ))}
         </ol>
       </section>
+    </div>
+    </>
+  );
+}
+
+// iPhones and iPads can't be asked to install, so they get a short how-to, until closed.
+function IosHint() {
+  const [shown, setShown] = useState(() => isIOS() && !installed() && !hintClosed());
+  if (!shown) return null;
+  return (
+    <div role="note" className="flex items-start gap-3 rounded-3xl bg-accent-soft p-4">
+      <IconTile name="plusSquare" tone="bg-surface text-accent" />
+      <p className="min-w-0 flex-1 text-sm">
+        <b>Add Lanet to your Home Screen</b> to open it like an app: tap{" "}
+        <Icon name="iosShare" className="inline size-4 align-[-3px] text-accent" /> <b>Share</b>, then{" "}
+        <b>Add to Home Screen</b>.
+      </p>
+      <Button className="min-w-11 px-2" aria-label="Close" onClick={() => { closeHint(); setShown(false); }}><Icon name="x" /></Button>
     </div>
   );
 }
@@ -82,9 +106,14 @@ function Room({ room, status, guests, selected, notice, locked, close, select, s
   const canSend = !!open && open.present && open.link === "connected";
   // Picking a device on a phone goes straight to its files.
   const pick = (id: string) => { select(id); setTab("files"); };
+  const targets: Target[] = guests.filter((g) => g.present).map((g) => ({
+    id: g.id, name: g.name, ready: g.link === "connected" && !g.transfers.mismatch, transfers: g.transfers,
+    sendText: (body: string) => sendText(g.id, body),
+  }));
 
   return (
     <>
+      <SharedWaiting targets={targets} preferred={selected} notReady="When a device joins with the PIN, you can send these to it." />
       <div className="grid gap-4 lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] lg:items-start">
         <div className={`${shownOn(tab === "room")} min-w-0 flex-col gap-4`}>
           <RoomCard room={room} status={status} />

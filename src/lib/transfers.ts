@@ -174,8 +174,9 @@ export class Transfers {
     return false;
   }
 
-  offer(picked: Picked[]): boolean {
-    if (this.mismatch) return false;
+  // The new batch's id, or null when it couldn't be offered (not connected, or a different version).
+  offer(picked: Picked[]): string | null {
+    if (this.mismatch) return null;
     const files: TFile[] = picked.map(({ file, path }) => (
       { path, size: file.size, type: file.type, modified: file.lastModified, done: 0, state: "waiting" }
     ));
@@ -190,11 +191,11 @@ export class Transfers {
       folder: files.some((f) => f.path.includes("/")),
     };
     const list = files.map(({ path, size, type, modified }) => ({ path, size, type, modified }));
-    if (!this.peer?.send({ t: "offer", id: b.id, files: list })) return false;
+    if (!this.peer?.send({ t: "offer", id: b.id, files: list })) return null;
     this.outFiles.set(b.id, picked.map((p) => p.file));
     this.batches.push(b);
     this.changed();
-    return true;
+    return b.id;
   }
 
   // From a click: picking a folder or asking for permission needs one.

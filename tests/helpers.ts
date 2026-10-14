@@ -2,7 +2,7 @@
 // through the real screens. Test files are made inside the page, so no files are needed on disk.
 import { expect, type Browser, type Page } from "@playwright/test";
 
-export type Sink = "folder" | "browser" | "memory";
+export type Sink = "folder" | "browser" | "memory" | "download";
 
 // A browser window of its own (separate storage), optionally with a way of saving forced.
 // "folder" saves into the browser's own storage as a stand-in for a folder the person picked.

@@ -28,6 +28,10 @@ Any device can **send** files of any size.
 
 **If the connection drops:** a transfer pauses and carries on from where it stopped once both devices are back, as long as both pages stay open. If the sending page was reloaded, pick the same files again and they carry on. If the receiving page is closed or reloaded, the transfer starts again. A device that drops and rejoins keeps its place and its conversation on the main device.
 
+**As an app:** on Android and on Chrome or Edge on a computer, tap **Install app** to add Lanet like an app. On iPhone and iPad, tap **Share**, then **Add to Home Screen** (Lanet shows a short hint). Links and QR codes still open in Safari on an iPhone.
+
+**Share to Lanet** (Android, with Lanet installed): pick photos, videos, files, text or a link in any app, tap **Share**, and choose **Lanet**. They wait on your phone in a "Waiting to send" card until you send them to a device in your room, or for up to a day.
+
 **Limits**
 
 - Both devices need the page open, and phone screens need to stay on (Lanet asks the phone to keep the screen on while files move).

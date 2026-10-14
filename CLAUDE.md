@@ -124,6 +124,12 @@ These were asked for or approved by the user. Keep them unless the user changes 
    - Deployed by the user and checked live from two tabs: 6 small files and a 100 MB file arrived byte for byte (4 files at once; the big file over 3 connections), nothing blocked by the security headers, headers and link preview correct.
    - Devices exchange a protocol version (`PROTOCOL` in `transfers.ts`) in `hello`; if it differs, the Files panel says to reload both pages and sending is switched off. Bump `PROTOCOL` whenever the file messages or channel labels change.
 
+10. Installable app and sharing — approved by the user ("do all three"):
+   - 10a. An automated test for the `download` way of saving (single file and a folder as `.zip`, checked byte for byte).
+   - 10b. Installable app: manifest, icons, iPhone/iPad home-screen settings; a dismissible "Add to Home Screen" hint on iPhone/iPad (never inside the installed app); a small "Install app" button on Chrome/Edge when the browser offers it. Limits told to the user: Apple allows no install prompt, and links/QR codes always open in Safari, not the installed app.
+   - 10c. Share to Lanet (Android, installed only): files, photos, text and links from the share sheet wait in the browser's storage until sent or removed (at most 1 day); every open Lanet page shows a "Waiting to send" card that asks which device to send to; they wait if not in a room yet; removed only once they've arrived.
+   - All three done and tested: 40 tests pass (`download.spec.ts`, `install.spec.ts`, `sharetarget.spec.ts` new). Not testable here: the real Android share sheet and installing on a real phone; Apple's "Add to Home Screen" on a real iPhone.
+
 **Still with the user:** the real-device check on the live site (Android, iPhone or iPad, Wi-Fi off and on mid-transfer), and their speeds there.
 
 ## Architecture in one screen
@@ -138,6 +144,8 @@ These were asked for or approved by the user. Keep them unless the user changes 
 - `src/lib/pick.ts` — files and folders from the pickers and from drag and drop, each with its path inside the folder.
 - `src/lib/zip.ts` — a received folder packed into one `.zip` as it arrives, for every way of saving except `folder`. Its predicted size must match the real one exactly, because a streamed download announces it in advance.
 - `src/Files.tsx` — the Files screen.
+- `src/lib/install.ts` — installing as an app (the browser's install offer, the iPhone hint's "closed" flag); `public/manifest.webmanifest` lists the icons and the share target.
+- `src/lib/shared.ts`, `src/Shared.tsx` — what was shared to Lanet from another app, and the "Waiting to send" card on every screen.
 
 ## Things that will bite you
 
@@ -147,7 +155,8 @@ These were asked for or approved by the user. Keep them unless the user changes 
 - **The room gives a device a new id every time it joins.** The main device recognises a returning device by its `key` (random, kept in the tab's sessionStorage, passed through the room in `knock` and `welcome`) and moves the same `Guest` entry to the new id. Key per-device state on `key`, never on `id`.
 - **A drop pauses; it never fails.** In `transfers.ts`, a closed channel means `Dropped` and pauses the batch. Only a real error (disk full, unreadable file, out of step) fails it. Writers stay open while paused. Every `send` into a channel must check it is still open: a channel can close between two pieces before its close event arrives.
 - **Folder-saved files leave an empty name if the page closes mid-file.** `sinks.ts` remembers those names and removes them, if still empty, the next time files are accepted into a folder.
-- **The service worker only answers `/__download/…`** and must never cache the app.
+- **The service worker answers only `/__download/…` and `POST /share-target`** and must never cache the app. Shared files go to `lanet-shared/<id>/files/` with a `meta.json` written last (a set without it is still arriving). Sending a shared set uses `Transfers.offer`, which returns the batch id so the card can remove the set only once that batch is done.
+- **The built-in browser pane can't register service workers on localhost** ("unknown error when fetching the script"), so downloads and Share to Lanet can't be tried there; the Playwright tests and the live site work. Take screenshots with Playwright instead.
 - **The browser pane's `preview_start` with a name reads the launch settings of the folder this session was first opened in** (eOffice Assist), even after the session moved here, so `lanet-preview` isn't found. Never add Lanet entries to eOffice Assist; run `npm run preview` in a terminal tab and call `preview_start` with `url: "http://localhost:4173"`.
 - **Speed numbers on this PC swing by 30% or more between runs** (other apps use the processor). Compare versions only by running them alternately, several rounds each.
 - **Restart `npm run preview` after every `npm run build`.** A running preview keeps serving the old page, which points at script files the build replaced, so the page comes up blank with 500 errors.

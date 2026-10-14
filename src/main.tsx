@@ -2,10 +2,11 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
 import { clearOldStored } from "./lib/sinks";
+import "./lib/install";  // listens early for the browser's "can be installed"
 import "./styles.css";
 
-// The service worker only streams received files into downloads (public/sw.js); it caches nothing.
-// Browsers allow it on https pages and on localhost only.
+// The service worker streams received files into downloads and takes in files shared to Lanet from
+// another app (public/sw.js); it caches nothing. Browsers allow it on https pages and on localhost only.
 if (window.isSecureContext && "serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }

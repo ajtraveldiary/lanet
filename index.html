@@ -10,6 +10,13 @@
     <link rel="canonical" href="https://lanet.workdesk.workers.dev/" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- Installable as an app: Chrome and Edge read the manifest; iPhone and iPad read the apple- tags
+         when added to the Home Screen, and then open Lanet full-screen. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Lanet" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
 
     <!-- The preview shown when the link is shared (WhatsApp, Facebook, LinkedIn, Telegram, Slack…).
          Apps fetch it from the server, so the room id after # is never part of what they see. -->

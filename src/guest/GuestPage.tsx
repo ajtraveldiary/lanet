@@ -2,6 +2,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { BLOCKED_HELP, Button, Card, DeviceTile, IconTile, LinkPill, Note, TabBar, shownOn } from "../ui";
 import { Conversation } from "../Conversation";
 import { FilesPanel } from "../Files";
+import { SharedWaiting } from "../Shared";
 import { useBusyGuard } from "../lib/guard";
 import { useGuestRoom } from "./useGuestRoom";
 
@@ -53,6 +54,11 @@ export function GuestPage({ roomId }: { roomId: string }) {
           ) : null}
         </div>
 
+        <SharedWaiting
+          targets={[{ id: "main", name: host, ready: g.link === "connected" && !g.transfers.mismatch, transfers: g.transfers, sendText: g.sendText }]}
+          notReady=""
+        />
+
         <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
           <div className={`${shownOn(tab === "files")} min-w-0 flex-col`}>
             <Card title="Files">
@@ -95,6 +101,9 @@ export function GuestPage({ roomId }: { roomId: string }) {
           {g.reconnecting && <Note tone="warn">Can't reach the room right now. Trying again…</Note>}
         </div>
       </Card>
+      <div className="mt-4">
+        <SharedWaiting targets={[]} notReady="Join with the PIN first; then you can send these to the main device." />
+      </div>
     </Centered>
   );
 }
