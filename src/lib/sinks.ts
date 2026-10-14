@@ -66,20 +66,29 @@ export async function chooseFolder(): Promise<FileSystemDirectoryHandle> {
   return dir;
 }
 
-async function folder(): Promise<FileSystemDirectoryHandle> {
+// Thrown when files would be accepted without a tap but the folder still needs the person's OK.
+export class NeedsTap extends Error {
+  constructor() { super("Tap Accept: saving into your folder needs your OK once in each visit."); }
+}
+
+// `quiet`: accepting without a tap, so only a folder already allowed in this visit will do.
+async function folder(quiet: boolean): Promise<FileSystemDirectoryHandle> {
+  if (safeLocal("lanet.sink") === "folder") return navigator.storage.getDirectory();
   const dir = await kvGet<FileSystemDirectoryHandle>(FOLDER_KEY);
   if (dir?.queryPermission) {
     const now = await dir.queryPermission({ mode: "readwrite" });
     if (now === "granted") return dir;
+    if (quiet) throw new NeedsTap();
     if (now === "prompt" && (await dir.requestPermission?.({ mode: "readwrite" })) === "granted") return dir;
   }
+  if (quiet) throw new NeedsTap();
   return chooseFolder();
 }
 
 // Throws an AbortError when the person closes the folder picker; the offer then stays open.
-export async function openSink(kind: SinkKind, total: number): Promise<Sink> {
+export async function openSink(kind: SinkKind, total: number, quiet = false): Promise<Sink> {
   if (kind === "folder") {
-    const dir = await folder();
+    const dir = await folder(quiet);
     await clearUnfinished();
     const tops = new Map<string, string>();
     // Files can arrive several at a time; names are chosen and files created one at a time, so two

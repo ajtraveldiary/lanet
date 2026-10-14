@@ -8,6 +8,8 @@ Send files, folders and text between devices on the same Wi-Fi, straight from th
 2. On another device on the same Wi-Fi, scan the QR code (or open the link) and type the PIN.
 3. Send files or text either way. The other side taps **Accept**, and the files go straight from one device to the other.
 
+   To skip **Accept**, the receiving device can switch on **Accept files from … automatically** in its Files panel. It is off by default and turns off when the page reloads or the room closes. Batches over 1 GB and programs, installers or scripts (`.exe`, `.apk`, `.js`, `.html` and similar) still ask.
+
 ## Privacy
 
 - **Files and text never go through the internet.** The devices connect directly over your Wi-Fi (WebRTC, encrypted). Lanet only offers local network addresses, so a transfer can't leave the network.

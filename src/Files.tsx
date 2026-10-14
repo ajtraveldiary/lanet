@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { Button, DeviceTile, IconTile, Note, Ring } from "./ui";
 import { Icon, fileKind } from "./icons";
-import { MAX_FILES, MISMATCH, type Batch, type Caps, type TFile, type Transfers } from "./lib/transfers";
+import { AUTO_LIMIT, MAX_FILES, MISMATCH, type Batch, type Caps, type TFile, type Transfers } from "./lib/transfers";
 import { formatSize, formatTime } from "./lib/files";
 import { deviceName } from "./lib/device";
 import { canPickFolder, fromDrop, fromInput, type Picked } from "./lib/pick";
@@ -69,6 +69,7 @@ export function FilesPanel({ transfers, otherName, canSend: connected }: { trans
       {connected && transfers.mismatch && <Note tone="warn">{MISMATCH}</Note>}
       {problem && <Note tone="bad">{problem}</Note>}
       <ReceiveWhere />
+      <AutoAccept transfers={transfers} otherName={otherName} />
       {transfers.batches.length > 0 && (
         <ul className="flex flex-col gap-3">
           {[...transfers.batches].reverse().map((b) => <BatchView key={b.id + (b.out ? "o" : "i")} b={b} transfers={transfers} otherName={otherName} />)}
@@ -116,6 +117,34 @@ function ReceiveWhere() {
           <button type="button" onClick={change} className="min-h-8 cursor-pointer font-semibold text-teal underline underline-offset-2">Change folder</button>
         )}
       </div>
+    </div>
+  );
+}
+
+// Off by default; while on, batches from this device start without Accept, within the limits.
+function AutoAccept({ transfers, otherName }: { transfers: Transfers; otherName: string }) {
+  const on = transfers.autoAccept;
+  return (
+    <div className={`flex items-start gap-3 rounded-2xl p-3 text-sm ${on ? "bg-accent-soft" : "bg-sunken"}`}>
+      <div className="min-w-0 flex-1">
+        <p className="font-semibold">Accept files from {otherName} automatically</p>
+        <p className="text-muted">
+          {on ? "On. " : ""}Up to {formatSize(AUTO_LIMIT)} at a time. Programs and installers still ask. Turns off when the room closes or this page reloads.
+        </p>
+      </div>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={`Accept files from ${otherName} automatically`}
+        // Read the live value: a quick second tap can land before the screen updates.
+        onClick={() => transfers.setAutoAccept(!transfers.autoAccept, otherName)}
+        className="inline-flex min-h-11 shrink-0 cursor-pointer items-center"
+      >
+        <span className={`relative inline-block h-7 w-12 rounded-full transition ${on ? "bg-accent" : "bg-line"}`}>
+          <span className={`absolute top-1 size-5 rounded-full bg-surface shadow transition-all ${on ? "left-6" : "left-1"}`} />
+        </span>
+      </button>
     </div>
   );
 }
@@ -254,6 +283,8 @@ function BatchView({ b, transfers, otherName }: { b: Batch; transfers: Transfers
       {b.state === "incoming" && b.continues && (
         <p className="text-sm text-muted">These are the files that stopped earlier. Accept to carry on: {formatSize(b.done)} of {formatSize(b.total)} is already here.</p>
       )}
+      {b.state === "incoming" && b.note && <Note tone="warn">{b.note}</Note>}
+      {b.auto && <p className="text-sm text-muted">Accepted automatically.</p>}
       {b.error && b.state === "failed" && <Note tone="bad">{b.error}</Note>}
       {problem && <Note tone="bad">{problem}</Note>}
       {willZip && <p className="text-sm text-muted">This device can't save a folder, so it arrives as one .zip file.</p>}

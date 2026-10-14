@@ -41,6 +41,8 @@ export type Batch = {
   zip?: { name: string; saved?: Saved };  // receiver: the folder arrives packed into this .zip
   orphan?: boolean;     // receiver, paused: the sending page lost it; the same files offered again continue it
   continues?: string;   // receiver, incoming: this offer carries on that paused batch
+  auto?: boolean;       // receiver: accepted automatically ("Always accept from this device")
+  note?: string;        // receiver, incoming: why it still waits for a tap
 };
 export type Caps = { ios: boolean; sink: SinkKind; room?: number; v?: number };
 
@@ -56,6 +58,10 @@ const PARALLEL = 4;                // smaller files moving at the same time
 const MAX_SLOTS = 3;               // the main connection and two extra lanes
 const ACK_EVERY = 1024 ** 2;
 export const MAX_FILES = 10_000;
+// "Always accept from this device" takes batches up to this size; bigger ones still ask.
+export const AUTO_LIMIT = 1024 ** 3;
+// Programs, installers and scripts always ask, even from a device whose files are accepted automatically.
+const RISKY = /\.(exe|msi|bat|cmd|com|scr|ps1|vbs|js|jse|wsf|hta|lnk|jar|apk|aab|dmg|pkg|app|sh|reg|dll|iso|img|vhd|html?|xhtml|svg)$/i;
 const MAX_SIZE = 2 ** 50;
 
 const OPEN: BatchState[] = ["asking", "incoming", "active", "paused"];
@@ -99,6 +105,15 @@ export class Transfers {
   private gen = new Map<string, number>();  // bumps whenever sending (re)starts, so an older run stands down
   private sending: Promise<void> = Promise.resolve();
   private samples = new Map<string, { at: number; done: number }>();
+  // Switched on by the person for this device; lives only as long as this page and this room.
+  autoAccept = false;
+  private autoFrom = "";
+
+  setAutoAccept(on: boolean, from: string) {
+    this.autoAccept = on;
+    this.autoFrom = from;
+    this.changed();
+  }
 
   constructor(private changed: () => void) {}
 
@@ -198,9 +213,10 @@ export class Transfers {
     return b.id;
   }
 
-  // From a click: picking a folder or asking for permission needs one.
+  // From a click: picking a folder or asking for permission needs one. Without a click (`quiet`, for
+  // "Always accept from this device"), only a folder already allowed in this visit is used.
   // `from` names the sending device, for the .zip's name when a folder has to be packed.
-  async accept(id: string, from: string): Promise<string | null> {
+  async accept(id: string, from: string, quiet = false): Promise<string | null> {
     const b = this.find(id, false);
     if (b?.state !== "incoming") return null;
     if (this.mismatch) return MISMATCH;
@@ -211,7 +227,7 @@ export class Transfers {
     const packed = b.folder && kind !== "folder";
     let sink: Sink, zip: ZipBatch | null = null;
     try {
-      sink = await openSink(kind, packed ? zipLength(b.files) : b.total);
+      sink = await openSink(kind, packed ? zipLength(b.files) : b.total, quiet);
       if (packed) {
         const name = zipName(b.files, from);
         zip = new ZipBatch(b.files, await sink.open(name, zipLength(b.files), "application/zip"));
@@ -304,6 +320,21 @@ export class Transfers {
     if (old) { b.continues = old.id; b.done = old.done; }
     this.batches.push(b);
     this.changed();
+    if (this.autoAccept) void this.acceptOnItsOwn(b);
+  }
+
+  // "Always accept from this device": takes the batch without a tap, unless it's one that must still ask.
+  private async acceptOnItsOwn(b: Batch) {
+    if (b.continues) return;
+    if (b.total > AUTO_LIMIT) { b.note = "Over 1 GB, so this still needs your OK."; this.changed(); return; }
+    if (b.files.some((f) => RISKY.test(f.path))) {
+      b.note = "Has a program, installer or script, so this still needs your OK.";
+      this.changed();
+      return;
+    }
+    const problem = await this.accept(b.id, this.autoFrom, true);
+    if (b.state === "active") b.auto = true;
+    else if (problem) { b.note = problem; this.changed(); }
   }
 
   // Accepting an offer that continues a paused batch: it takes over that batch's place, its open files
