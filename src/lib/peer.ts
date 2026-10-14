@@ -2,7 +2,8 @@
 // The room only carries the setup messages; everything sent after that goes device to device.
 
 export type LinkState = "connecting" | "connected" | "reconnecting" | "blocked";
-export type Signal = { sdp?: RTCSessionDescriptionInit; ice?: RTCIceCandidateInit; restart?: true };
+// `lane` picks one of the extra connections between the same two devices (1 or 2); none means the main one.
+export type Signal = { sdp?: RTCSessionDescriptionInit; ice?: RTCIceCandidateInit; restart?: true; lane?: number };
 
 const CONNECT_TIMEOUT = 15_000;
 // Messages bigger than this go in parts. Kept small enough that a part stays under 64 KB,

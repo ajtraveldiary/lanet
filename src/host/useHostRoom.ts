@@ -72,11 +72,43 @@ export function useHostRoom() {
     if (id) patch(id, (g) => ({ ...g, unread: 0 }));
   }, [patch]);
 
+  // Each device may add two extra connections ("lanes" 1 and 2), used only to spread big files for speed.
+  const lanes = useRef(new Map<string, PeerLink>());
+  const laneKey = (id: string, k: number) => `${id}:${k}`;
+
+  const dropLane = useCallback((id: string, k: number) => {
+    lanes.current.get(laneKey(id, k))?.close();
+    lanes.current.delete(laneKey(id, k));
+    guest(id)?.transfers.setLane(k, null);
+  }, []);
+
+  const makeLane = useCallback((id: string, k: number) => {
+    const current = () => lanes.current.get(laneKey(id, k)) === lane;
+    const lane: PeerLink = new PeerLink({
+      offerer: false,
+      signal: (s: Signal) => {
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "signal", to: id, data: { ...s, lane: k } }));
+      },
+      onState: (s) => { if (current()) guest(id)?.transfers.setLane(k, s === "connected" ? lane : null); },
+      onChannel: (ch) => {
+        const g = guest(id);
+        if (g && current()) g.transfers.channel(ch);
+        else ch.close();
+      },
+      onMessage: () => {},
+    });
+    lanes.current.set(laneKey(id, k), lane);
+    return lane;
+  }, []);
+
   const dropPeer = useCallback((id: string) => {
     peers.current.get(id)?.close();
     peers.current.delete(id);
+    dropLane(id, 1);
+    dropLane(id, 2);
     guest(id)?.transfers.detach();
-  }, []);
+  }, [dropLane]);
 
   const makePeer = useCallback((id: string) => {
     const current = () => peers.current.get(id) === peer;
@@ -164,6 +196,18 @@ export function useHostRoom() {
           }
         } else if (m.type === "signal" && m.data && typeof m.data === "object") {
           const data = m.data as Signal;
+          const k = Number(data.lane) || 0;
+          if (k === 1 || k === 2) {
+            // An extra connection: set up (or replaced) on its own, never touching the main one.
+            if (!guest(m.from)) return;
+            if (data.sdp?.type === "offer") {
+              dropLane(m.from, k);
+              makeLane(m.from, k).handle(data);
+            } else {
+              lanes.current.get(laneKey(m.from, k))?.handle(data);
+            }
+            return;
+          }
           // Each device starts its connection with an offer; a new offer replaces the old connection.
           if (data.sdp?.type === "offer") {
             dropPeer(m.from);
@@ -201,7 +245,7 @@ export function useHostRoom() {
     };
     setStatus("connecting");
     connect();
-    const all = peers.current;
+    const all = peers.current, extra = lanes.current;
     return () => {
       stopped = true;
       clearTimeout(timer);
@@ -209,9 +253,11 @@ export function useHostRoom() {
       wsRef.current = null;
       for (const p of all.values()) p.close();
       all.clear();
+      for (const p of extra.values()) p.close();
+      extra.clear();
       for (const g of guestsRef.current) g.transfers.end("The room closed");
     };
-  }, [room, makePeer, patch, select, updateGuests, newGuest, dropPeer]);
+  }, [room, makePeer, patch, select, updateGuests, newGuest, dropPeer, dropLane, makeLane]);
 
   // A device that has left takes its conversation with it; pick another one to show.
   useEffect(() => {

@@ -82,7 +82,15 @@ export async function openSink(kind: SinkKind, total: number): Promise<Sink> {
     const dir = await folder();
     await clearUnfinished();
     const tops = new Map<string, string>();
-    return { kind, where: dir.name ? `the “${dir.name}” folder` : "the folder you picked", open: (path) => folderWriter(dir, path, tops) };
+    // Files can arrive several at a time; names are chosen and files created one at a time, so two
+    // never pick the same free name. The writing itself still runs side by side.
+    let naming: Promise<unknown> = Promise.resolve();
+    const open = (path: string) => {
+      const next = naming.then(() => folderWriter(dir, path, tops));
+      naming = next.catch(() => {});
+      return next;
+    };
+    return { kind, where: dir.name ? `the “${dir.name}” folder` : "the folder you picked", open };
   }
   if (kind === "download") return { kind, where: "your downloads", open: (name, size) => downloadWriter(name, size) };
   if (kind === "browser") {

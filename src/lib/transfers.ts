@@ -1,14 +1,20 @@
 // Sending and receiving files with one other device over the direct connection.
 //
 // The sender offers a batch of files on the control channel; nothing moves until the receiver accepts.
-// Each file then gets its own data channel, labelled "f:<batch>:<file>:<starting byte>": binary pieces,
-// then "end". The receiver answers on the same channel with "ack:<bytes written>" every so often and
+// Each file then gets its own data channel, labelled "f:<batch>:<file>:<starting byte>:<slot>:<slots>":
+// binary pieces, then "end". The receiver answers on slot 0 with "ack:<bytes written>" every so often and
 // "done" (or "err:<reason>") at the end. The sender never runs more than WINDOW bytes ahead of what the
 // receiver has written, so a slow disk can't fill memory.
 //
-// A dropped connection pauses a batch instead of failing it: both sides keep what they have (the file
-// being written stays open). When a new connection comes up, each side says which batches it still has
-// ("hello"), and the receiver asks for the rest of each paused one ("resume", from the byte it got to).
+// Faster on two counts. Up to PARALLEL smaller files move side by side. A big file is cut into 1 MB blocks
+// dealt round-robin over up to three connections between the same two devices (the main one and two extra
+// "lanes"): slot k carries blocks k, k + slots, k + 2·slots… of the file from its starting byte, in order, so
+// the receiver knows where every piece belongs and puts them back in order before writing.
+//
+// A dropped connection pauses a batch instead of failing it: both sides keep what they have (files being
+// written stay open). When the main connection comes back, each side says which batches it still has
+// ("hello"), and the receiver asks for the rest of each paused one ("resume", with each unfinished file and
+// the byte it got to). If only a file's channel or an extra lane dropped, the receiver asks straight away.
 // If the sending page was reloaded, the receiver keeps the paused batch; when the same files are offered
 // again, accepting carries on where it stopped.
 import { randomKey, type PeerLink } from "./peer";
@@ -36,11 +42,18 @@ export type Batch = {
   orphan?: boolean;     // receiver, paused: the sending page lost it; the same files offered again continue it
   continues?: string;   // receiver, incoming: this offer carries on that paused batch
 };
-export type Caps = { ios: boolean; sink: SinkKind; room?: number };
+export type Caps = { ios: boolean; sink: SinkKind; room?: number; v?: number };
 
-const READ_BLOCK = 2 * 1024 ** 2;  // read from disk 2 MB at a time
-const HIGH = 8 * 1024 ** 2;        // most bytes waiting in the connection's own buffer
-const WINDOW = 16 * 1024 ** 2;     // most bytes sent but not yet written on the other side
+// Both devices must speak the same version of this protocol; a page left open across an update doesn't.
+export const PROTOCOL = 2;
+
+const HIGH = 8 * 1024 ** 2;        // most bytes waiting in one channel's own buffer
+const WINDOW = 32 * 1024 ** 2;     // most bytes sent but not yet written on the other side, per file
+const GROUP = 4 * 1024 ** 2;       // the receiver writes in groups of this size
+const BLOCK = 1024 ** 2;           // a big file is dealt across connections in blocks of this size
+const STRIPE_MIN = 32 * 1024 ** 2; // files (or what's left of them) from this size use every connection
+const PARALLEL = 4;                // smaller files moving at the same time
+const MAX_SLOTS = 3;               // the main connection and two extra lanes
 const ACK_EVERY = 1024 ** 2;
 export const MAX_FILES = 10_000;
 const MAX_SIZE = 2 ** 50;
@@ -55,19 +68,35 @@ class Dropped extends Error {
   constructor() { super("The connection dropped"); }
 }
 
-// The receiver's place in the file it is writing. Kept through a dropped connection, so the file
-// stays open and the rest can be appended.
-type Rx = { i: number; writer: FileWriter | null; received: number; written: number; chain: Promise<void> };
+// Which files still need sending, and from which byte: [file, byte][].
+type Plan = [number, number][];
+
+// The receiver's place in one file. Kept through a dropped connection, so the file stays open and the rest
+// can be appended. `next` is the first byte not yet in order; pieces that arrived early wait in `early`.
+type Session = { start: number; slots: number; pos: number[]; ends: number; seen: Set<number>; chans: RTCDataChannel[]; ack: RTCDataChannel | null };
+type Rx = {
+  writer: FileWriter | null;
+  written: number;
+  next: number;
+  chain: Promise<void>;
+  session: Session | null;
+  early: Map<number, ArrayBuffer>;
+  earlyBytes: number;
+  group: ArrayBuffer[];
+  grouped: number;
+};
 
 export class Transfers {
   batches: Batch[] = [];
   remote: Caps | null = null;
   private peer: PeerLink | null = null;
+  private lanes: (PeerLink | null)[] = [null, null, null];  // [unused, lane 1, lane 2]
   private outFiles = new Map<string, File[]>();
   private sinks = new Map<string, Sink>();
   private zips = new Map<string, ZipBatch>();
-  private rx = new Map<string, Rx>();
-  private halts = new Map<string, () => void>();  // closes the channel a batch is using right now
+  private rx = new Map<string, Map<number, Rx>>();
+  private halts = new Map<string, Set<() => void>>();  // close the channels a batch is using right now
+  private gen = new Map<string, number>();  // bumps whenever sending (re)starts, so an older run stands down
   private sending: Promise<void> = Promise.resolve();
   private samples = new Map<string, { at: number; done: number }>();
 
@@ -89,11 +118,21 @@ export class Transfers {
     this.changed();
   }
 
+  // An extra connection to the same device came up (peer) or went (null). Big files use whichever are up.
+  setLane(k: number, peer: PeerLink | null) {
+    if (k === 1 || k === 2) this.lanes[k] = peer;
+  }
+
   // The room has closed, or this device is gone for good: nothing can continue.
   end(why: string) {
     this.peer = null;
     for (const b of this.batches) if (isOpen(b)) this.stop(b, "failed", why);
     this.changed();
+  }
+
+  // The other device runs a different version of Lanet (a page left open across an update).
+  get mismatch(): boolean {
+    return !!this.remote && this.remote.v !== PROTOCOL;
   }
 
   private async sayHello() {
@@ -103,22 +142,22 @@ export class Transfers {
     // Which batches this side still has, so the other side can tell what to resume and what was lost.
     const open = this.batches.filter((b) => isOpen(b) && !b.orphan).map((b) => b.id);
     const done = this.batches.filter((b) => b.state === "done").map((b) => b.id);
-    peer?.send({ t: "hello", ios: isIOS(), sink, room, open, done });
+    peer?.send({ t: "hello", v: PROTOCOL, ios: isIOS(), sink, room, open, done });
   }
 
   // Answers true when the control message was about files.
   handle(m: Record<string, unknown>): boolean {
     switch (m.t) {
       case "hello": this.hello(m); return true;
-      case "offer": this.offered(m); return true;
+      case "offer": if (!this.mismatch) this.offered(m); return true;
       case "accept": {
         const b = this.find(m.id, true);
-        if (b?.state === "asking") this.startFrom(b, m.file, m.at);
+        if (b?.state === "asking") this.startFrom(b, m.files, m.parallel);
         return true;
       }
       case "resume": {
         const b = this.find(m.id, true);
-        if (b && (b.state === "paused" || b.state === "active")) this.startFrom(b, m.file, m.at);
+        if (b && (b.state === "paused" || b.state === "active")) this.startFrom(b, m.files, m.parallel);
         return true;
       }
       case "decline": {
@@ -136,6 +175,7 @@ export class Transfers {
   }
 
   offer(picked: Picked[]): boolean {
+    if (this.mismatch) return false;
     const files: TFile[] = picked.map(({ file, path }) => (
       { path, size: file.size, type: file.type, modified: file.lastModified, done: 0, state: "waiting" }
     ));
@@ -162,6 +202,7 @@ export class Transfers {
   async accept(id: string, from: string): Promise<string | null> {
     const b = this.find(id, false);
     if (b?.state !== "incoming") return null;
+    if (this.mismatch) return MISMATCH;
     const old = b.continues ? this.find(b.continues, false) : undefined;
     if (old?.state === "paused" && old.orphan) return this.carryOn(b, old);
 
@@ -179,12 +220,13 @@ export class Transfers {
       if ((e as DOMException)?.name === "AbortError") return null;  // closed the folder picker
       return reason(e);
     }
-    if (b.state !== "incoming" || !this.peer?.send({ t: "accept", id })) {
+    if (zip) this.zips.set(id, zip);
+    if (b.state !== "incoming" || !this.peer?.send({ t: "accept", id, files: this.plan(b), parallel: this.parallel(b) })) {
       zip?.abort("Cancelled");
+      this.zips.delete(id);
       return b.state === "incoming" ? "Not connected right now. Try again in a moment." : null;
     }
     this.sinks.set(id, sink);
-    if (zip) this.zips.set(id, zip);
     b.where = sink.where;
     b.state = "active";
     this.changed();
@@ -206,17 +248,19 @@ export class Transfers {
     this.peer?.send({ t: "cancel", id });
   }
 
-  // A data channel the other device opened: one file of a batch this device accepted.
+  // A data channel the other device opened: one slot of one file of a batch this device accepted.
   channel(ch: RTCDataChannel) {
-    const m = /^f:([a-z0-9]+):(\d+):(\d+)$/.exec(ch.label);
+    const m = /^f:([a-z0-9]+):(\d+):(\d+):(\d+):(\d+)$/.exec(ch.label);
     const b = m && this.find(m[1], false);
-    const i = m ? Number(m[2]) : -1, at = m ? Number(m[3]) : -1;
+    const [i, start, slot, slots] = m ? [m[2], m[3], m[4], m[5]].map(Number) : [-1, -1, -1, -1];
     if (!b || !this.sinks.has(b.id) || b.state !== "active" || i >= b.files.length) return ch.close();
-    this.receive(b, i, at, ch);
+    if (slots < 1 || slots > MAX_SLOTS || slot >= slots || start > b.files[i].size) return ch.close();
+    this.receive(b, i, start, slot, slots, ch);
   }
 
   private hello(m: Record<string, unknown>) {
-    this.remote = { ios: m.ios === true, sink: m.sink as SinkKind, room: typeof m.room === "number" ? m.room : undefined };
+    this.remote = { ios: m.ios === true, sink: m.sink as SinkKind, room: typeof m.room === "number" ? m.room : undefined, v: typeof m.v === "number" ? m.v : undefined };
+    if (this.mismatch) { this.changed(); return; }
     const open = ids(m.open), done = ids(m.done);
     for (const b of this.batches) {
       if (!isOpen(b) || open.has(b.id)) continue;
@@ -261,11 +305,10 @@ export class Transfers {
     this.changed();
   }
 
-  // Accepting an offer that continues a paused batch: it takes over that batch's place, its open file
-  // and its half-written data, and asks for the rest only.
+  // Accepting an offer that continues a paused batch: it takes over that batch's place, its open files
+  // and their half-written data, and asks for the rest only.
   private async carryOn(b: Batch, old: Batch): Promise<string | null> {
-    const rx = this.rx.get(old.id);
-    await rx?.chain;
+    await this.drained(old.id);
     if (!this.peer) return "Not connected right now. Try again in a moment.";
     b.files.forEach((f, k) => Object.assign(f, { done: old.files[k].done, state: old.files[k].state, saved: old.files[k].saved }));
     b.where = old.where;
@@ -275,27 +318,35 @@ export class Transfers {
     }
     this.batches = this.batches.filter((x) => x !== old);
     b.continues = undefined;
-    const { file, at } = this.resumePoint(b);
     b.state = "active";
     this.progress(b);
-    this.peer.send({ t: "accept", id: b.id, file, at });
+    this.peer.send({ t: "accept", id: b.id, files: this.plan(b), parallel: this.parallel(b) });
     return null;
   }
 
-  // Where the receiver got to: the first file not yet done, and how much of it is written.
-  private resumePoint(b: Batch) {
-    const file = Math.max(0, b.files.findIndex((f) => f.state !== "done"));
+  // What the receiver still needs: every unfinished file, from the byte written so far.
+  private plan(b: Batch): Plan {
     const rx = this.rx.get(b.id);
-    return { file, at: rx && rx.i === file ? rx.written : 0 };
+    return b.files.flatMap((f, i): Plan => (f.state === "done" ? [] : [[i, rx?.get(i)?.written ?? 0]]));
+  }
+
+  // A folder packed into a .zip must arrive in order, one file at a time.
+  private parallel(b: Batch) {
+    return this.zips.has(b.id) ? 1 : PARALLEL;
+  }
+
+  // Everything that arrived before a drop is written before the receiver says where it got to.
+  private async drained(id: string) {
+    await Promise.all([...(this.rx.get(id)?.values() ?? [])].map((r) => r.chain));
   }
 
   private async askToResume(b: Batch) {
-    await this.rx.get(b.id)?.chain;  // everything that arrived before the drop is written first
-    if (b.state !== "paused" || !this.peer) return;
-    const { file, at } = this.resumePoint(b);
+    await this.drained(b.id);
+    if (b.state !== "paused" || b.orphan || !this.peer) return;
+    // If the request can't go now, the batch stays paused; the next connection's "hello" asks again.
+    if (!this.peer.send({ t: "resume", id: b.id, files: this.plan(b), parallel: this.parallel(b) })) return;
     b.state = "active";
     this.samples.delete(b.id);
-    this.peer.send({ t: "resume", id: b.id, file, at });
     this.changed();
   }
 
@@ -303,13 +354,28 @@ export class Transfers {
     return this.batches.find((b) => b.id === id && b.out === out);
   }
 
+  private addHalt(id: string, fn: () => void) {
+    const set = this.halts.get(id) ?? new Set();
+    set.add(fn);
+    this.halts.set(id, set);
+    return () => set.delete(fn);
+  }
+
+  private haltAll(id: string) {
+    const set = this.halts.get(id);
+    this.halts.delete(id);
+    for (const fn of set ?? []) fn();
+  }
+
   private pause(b: Batch) {
     if (b.state !== "active") return;
     b.state = "paused";
     b.speed = 0;
     this.samples.delete(b.id);
-    this.halts.get(b.id)?.();
-    this.halts.delete(b.id);
+    this.haltAll(b.id);
+    // Only a file's channel or an extra lane went, while the main connection is still up:
+    // the receiver asks for the rest straight away instead of waiting for a reconnect.
+    if (!b.out && this.peer) setTimeout(() => void this.askToResume(b), 500);
     this.changed();
   }
 
@@ -317,10 +383,10 @@ export class Transfers {
     b.state = state;
     if (why) b.error = why;
     b.orphan = undefined;
-    this.halts.get(b.id)?.();
-    this.halts.delete(b.id);
-    const rx = this.rx.get(b.id);
-    if (rx) { const f = b.files[rx.i]; if (f.state !== "done") f.state = "failed"; void rx.writer?.abort(); }
+    this.haltAll(b.id);
+    for (const [i, r] of this.rx.get(b.id) ?? []) {
+      if (b.files[i].state !== "done") { b.files[i].state = "failed"; void r.writer?.abort(); }
+    }
     this.rx.delete(b.id);
     this.outFiles.delete(b.id);
     this.sinks.delete(b.id);
@@ -368,63 +434,94 @@ export class Transfers {
     this.changed();
   }
 
-  // The receiver accepted (or asked for the rest): send from that file and byte on.
-  private startFrom(b: Batch, file: unknown, at: unknown) {
+  // The receiver accepted (or asked for the rest): send what it still needs.
+  private startFrom(b: Batch, list: unknown, parallel: unknown) {
     const files = this.outFiles.get(b.id);
-    const i = Number(file ?? 0), from = Number(at ?? 0);
-    if (!files || !Number.isInteger(i) || i < 0 || i >= files.length || !Number.isSafeInteger(from) || from < 0 || from > files[i].size) {
+    const plan: Plan = [];
+    const ok = !!files && Array.isArray(list) && list.every((e) => {
+      const [i, at] = Array.isArray(e) ? e.map(Number) : [NaN, NaN];
+      if (!Number.isInteger(i) || i < 0 || i >= files.length || !Number.isSafeInteger(at) || at < 0 || at > files[i].size) return false;
+      if (plan.some(([j]) => j === i)) return false;
+      plan.push([i, at]);
+      return true;
+    });
+    if (!ok) {
       this.stop(b, "failed", "The other device asked for a part that doesn't exist");
       this.peer?.send({ t: "cancel", id: b.id });
       return;
     }
+    const wanted = new Map(plan);
     b.files.forEach((f, k) => {
-      if (k < i) { f.state = "done"; f.done = f.size; }
-      else if (k === i) { f.done = from; f.state = "waiting"; }
+      const at = wanted.get(k);
+      if (at === undefined) { f.state = "done"; f.done = f.size; }
+      else { f.state = "waiting"; f.done = at; }
     });
     b.state = "active";
     this.samples.delete(b.id);
     this.progress(b);
+    const gen = (this.gen.get(b.id) ?? 0) + 1;
+    this.gen.set(b.id, gen);
+    const lanes = Math.min(Math.max(1, Number(parallel) || 1), PARALLEL);
     // Batches go out one at a time, so a second one doesn't halve the speed of the first.
-    this.sending = this.sending.then(() => this.send(b, i, from)).catch(() => {});
+    this.sending = this.sending.then(() => this.send(b, plan, lanes, gen)).catch(() => {});
   }
 
-  private async send(b: Batch, first: number, from: number) {
+  private async send(b: Batch, plan: Plan, parallel: number, gen: number) {
     const files = this.outFiles.get(b.id);
-    if (!files || b.state !== "active") return;
+    const current = () => this.gen.get(b.id) === gen && b.state === "active";
+    if (!files || !current()) return;
+    const one = async ([i, at]: [number, number]) => {
+      b.files[i].state = "moving";
+      await this.sendFile(b, i, files[i], at);
+      b.files[i].state = "done";
+      b.files[i].done = files[i].size;
+      this.progress(b);
+    };
     try {
-      for (let i = first; i < files.length; i++) {
-        if (b.state !== "active") return;
-        b.files[i].state = "moving";
-        await this.sendFile(b, i, files[i], i === first ? from : 0);
-        b.files[i].state = "done";
-        b.files[i].done = files[i].size;
-        this.progress(b);
+      if (parallel <= 1) {
+        for (const p of plan) { if (!current()) return; await one(p); }
+      } else {
+        // Smaller files first, several at a time; then each big file on its own, spread over every connection.
+        const small = plan.filter(([i, at]) => files[i].size - at < STRIPE_MIN);
+        const big = plan.filter(([i, at]) => files[i].size - at >= STRIPE_MIN);
+        const worker = async () => { while (small.length && current()) await one(small.shift()!); };
+        await Promise.all(Array.from({ length: Math.min(parallel, small.length) }, worker));
+        for (const p of big) { if (!current()) return; await one(p); }
       }
-      this.finished(b);
+      if (current()) this.finished(b);
     } catch (e) {
-      if (b.state !== "active") return;
+      if (!current()) return;
       if (e instanceof Dropped || !this.peer) return this.pause(b);
       this.stop(b, "failed", reason(e));
       this.peer?.send({ t: "cancel", id: b.id });
     }
   }
 
+  // The connections a file can use right now: the main one, then any extra lane that's up.
+  private connections(): PeerLink[] {
+    const extra = this.lanes.filter((p): p is PeerLink => !!p && p.state === "connected");
+    return [this.peer!, ...extra].slice(0, MAX_SLOTS);
+  }
+
   private async sendFile(b: Batch, i: number, file: File, start: number) {
-    const peer = this.peer;
-    if (!peer) throw new Dropped();
+    if (!this.peer) throw new Dropped();
     const f = b.files[i];
-    const ch = peer.openChannel(`f:${b.id}:${i}:${start}`);
-    ch.binaryType = "arraybuffer";
-    ch.bufferedAmountLowThreshold = HIGH / 4;
-    let acked = start, sent = start;
-    let broken: Error | null = null;
-    let wake: (() => void) | null = null;
-    const nudge = () => { const w = wake; wake = null; w?.(); };
+    const peers = file.size - start >= STRIPE_MIN ? this.connections() : [this.peer];
+    const slots = peers.length;
+    const chans = peers.map((p, k) => p.openChannel(`f:${b.id}:${i}:${start}:${k}:${slots}`));
+    let acked = start, broken: Error | null = null;
+    const waiting = new Set<() => void>();
+    const nudge = () => { for (const w of [...waiting]) w(); waiting.clear(); };
     let answered: (v: Error | null) => void;
     const answer = new Promise<Error | null>((r) => { answered = r; });
     const breakWith = (e: Error) => { broken ??= e; answered(broken); nudge(); };
-    ch.onbufferedamountlow = nudge;
-    ch.onmessage = (e) => {
+    for (const ch of chans) {
+      ch.binaryType = "arraybuffer";
+      ch.bufferedAmountLowThreshold = HIGH / 4;
+      ch.onbufferedamountlow = nudge;
+      ch.onclose = () => breakWith(new Dropped());
+    }
+    chans[0].onmessage = (e) => {
       if (typeof e.data !== "string") return;
       if (e.data.startsWith("ack:")) {
         acked = Math.max(acked, Number(e.data.slice(4)) || 0);
@@ -434,68 +531,96 @@ export class Transfers {
       } else if (e.data === "done") answered(null);
       else if (e.data.startsWith("err:")) breakWith(new Error(e.data.slice(4) || "The other device couldn't save the file"));
     };
-    ch.onclose = () => breakWith(new Dropped());
-    this.halts.set(b.id, () => { breakWith(new Dropped()); ch.close(); });
-    // The channel can close between two pieces, before its close event arrives.
-    const put = (data: string | Uint8Array<ArrayBuffer>) => {
+    const unhalt = this.addHalt(b.id, () => { breakWith(new Dropped()); for (const ch of chans) ch.close(); });
+    // A channel can close between two pieces, before its close event arrives.
+    const put = (ch: RTCDataChannel, data: string | Uint8Array<ArrayBuffer>) => {
       if (ch.readyState !== "open") throw broken ?? new Dropped();
       ch.send(data as string);
     };
+    const wait = () => new Promise<void>((r) => waiting.add(r));
 
-    await new Promise<void>((ok) => {
-      if (ch.readyState === "open") return ok();
-      ch.onopen = () => ok();
-      void answer.then(() => ok());
-    });
-    const piece = peer.chunkSize;
-    while (sent < file.size) {
-      if (broken) throw broken;
-      const end = Math.min(file.size, sent + READ_BLOCK);
-      let block: Uint8Array<ArrayBuffer>;
-      try {
-        block = new Uint8Array(await file.slice(sent, end).arrayBuffer());
-      } catch {
-        throw new Error(`Couldn't read “${f.path}”. Was it moved or deleted?`);
-      }
-      for (let o = 0; o < block.length; o += piece) {
-        while (!broken && (ch.bufferedAmount > HIGH || sent + o - acked > WINDOW)) await new Promise<void>((r) => { wake = r; });
+    try {
+      await Promise.all(chans.map((ch) => new Promise<void>((ok) => {
+        if (ch.readyState === "open") return ok();
+        ch.onopen = () => ok();
+        void answer.then(() => ok());
+      })));
+      // Slot k sends blocks k, k + slots, k + 2·slots… in order; the receiver works out where each piece goes.
+      await Promise.all(chans.map(async (ch, k) => {
+        const piece = peers[k].chunkSize;
+        for (let n = k; ; n += slots) {
+          const from = start + n * BLOCK;
+          if (from >= file.size) break;
+          if (broken) throw broken;
+          const to = Math.min(file.size, from + BLOCK);
+          let block: Uint8Array<ArrayBuffer>;
+          try {
+            block = new Uint8Array(await file.slice(from, to).arrayBuffer());
+          } catch {
+            throw new Error(`Couldn't read “${f.path}”. Was it moved or deleted?`);
+          }
+          for (let o = 0; o < block.length; o += piece) {
+            while (!broken && (ch.bufferedAmount > HIGH || from + o - acked > WINDOW)) await wait();
+            if (broken) throw broken;
+            put(ch, block.subarray(o, Math.min(block.length, o + piece)));
+          }
+        }
         if (broken) throw broken;
-        put(block.subarray(o, Math.min(block.length, o + piece)));
-      }
-      sent = end;
+        put(ch, "end");
+      }));
+      const err = await answer;
+      if (err) throw err;
+    } catch (e) {
+      breakWith(e instanceof Error ? e : new Error(reason(e)));
+      throw broken;
+    } finally {
+      unhalt();
     }
-    if (broken) throw broken;
-    put("end");
-    const err = await answer;
-    if (err) throw err;
-    ch.onclose = null;
-    this.halts.delete(b.id);
-    ch.close();
+    for (const ch of chans) { ch.onclose = null; ch.close(); }
   }
 
-  private receive(b: Batch, i: number, at: number, ch: RTCDataChannel) {
+  private receive(b: Batch, i: number, start: number, slot: number, slots: number, ch: RTCDataChannel) {
     ch.binaryType = "arraybuffer";
     const f = b.files[i];
-    let rx = this.rx.get(b.id);
-    const refuse = (why: string) => { if (ch.readyState === "open") ch.send("err:" + why); else ch.onopen = () => { ch.send("err:" + why); ch.close(); }; };
-    if (!rx || rx.i !== i) {
-      // A new file: the one before it must be finished, and this one starts at its first byte.
-      if (at !== 0 || (rx && b.files[rx.i].state !== "done")) return refuse("The transfer got out of step. Send it again.");
+    const refuse = (why: string) => {
+      const say = () => { ch.send("err:" + why); ch.close(); };
+      if (ch.readyState === "open") say(); else ch.onopen = say;
+    };
+    if (f.state === "done") return ch.close();
+    const files = this.rx.get(b.id) ?? new Map<number, Rx>();
+    this.rx.set(b.id, files);
+    let r = files.get(i);
+    if (!r) {
+      if (start !== 0) return refuse("The transfer got out of step. Send it again.");
       const zip = this.zips.get(b.id);
       const opened = zip ? Promise.resolve(zip.entry(i)) : this.sinks.get(b.id)!.open(f.path, f.size, f.type);
-      rx = { i, writer: null, received: 0, written: 0, chain: Promise.resolve() };
-      const r = rx;
-      rx.chain = opened.then((w) => { r.writer = w; });
-      this.rx.set(b.id, rx);
-    } else if (at !== rx.written) {
-      return refuse("The transfer got out of step. Send it again.");
+      const fresh: Rx = { writer: null, written: 0, next: 0, chain: Promise.resolve(), session: null, early: new Map(), earlyBytes: 0, group: [], grouped: 0 };
+      fresh.chain = opened.then((w) => { fresh.writer = w; });
+      files.set(i, fresh);
+      r = fresh;
     }
-    const r = rx;
-    r.received = r.written;
+    const rx = r;
+    // The first channel of a new start (an accept or a resume) begins a session; the others join it.
+    if (!rx.session || rx.session.start !== start || rx.session.slots !== slots) {
+      if (start !== rx.written) return refuse("The transfer got out of step. Send it again.");
+      for (const c of rx.session?.chans ?? []) c.close();
+      rx.session = { start, slots, pos: new Array(slots).fill(0), ends: 0, seen: new Set(), chans: [], ack: null };
+      rx.next = start;
+      rx.early.clear();
+      rx.earlyBytes = 0;
+      rx.group = [];
+      rx.grouped = 0;
+    }
+    const s = rx.session;
+    if (s.seen.has(slot)) return refuse("The transfer got out of step. Send it again.");
+    s.seen.add(slot);
+    s.chans.push(ch);
+    if (slot === 0) s.ack = ch;
     f.state = "moving";
-    let lastAck = r.written, over = false;
-    // Receipts into a channel that just closed are dropped: the drop itself is handled by onclose.
-    const tell = (s: string) => { if (ch.readyState === "open") ch.send(s); };
+
+    let over = false, lastAck = rx.written;
+    // Receipts go on slot 0; into a channel that just closed they're dropped, and the drop is handled by onclose.
+    const tell = (msg: string) => { if (s.ack?.readyState === "open") s.ack.send(msg); };
     const fail = (why: string) => {
       if (over || b.state !== "active") return;
       over = true;
@@ -503,40 +628,84 @@ export class Transfers {
       this.stop(b, "failed", why);
     };
     const step = (fn: () => Promise<void>) => {
-      r.chain = r.chain.then(() => (over ? undefined : fn())).catch((e) => fail(reason(e)));
+      rx.chain = rx.chain.then(() => (rx.session === s && b.state === "active" ? fn() : undefined)).catch((e) => fail(reason(e)));
     };
-    this.halts.set(b.id, () => { over = true; ch.close(); });
+    const unhalt = this.addHalt(b.id, () => { over = true; ch.close(); });
+    // Pieces are written in groups of about 4 MB: far fewer writes for the disk, the storage worker or the
+    // download. Anything not yet written when a connection drops is simply sent again on resume.
+    const flush = () => {
+      if (!rx.grouped) return;
+      const parts = rx.group, n = rx.grouped;
+      rx.group = [];
+      rx.grouped = 0;
+      step(async () => {
+        await rx.writer!.write(parts.length === 1 ? parts[0] : join(parts, n));
+        rx.written += n;
+        f.done = rx.written;
+        if (rx.written - lastAck >= ACK_EVERY) { lastAck = rx.written; tell("ack:" + rx.written); }
+        this.progress(b);
+      });
+    };
+    const settle = () => {
+      while (rx.early.has(rx.next)) {
+        const buf = rx.early.get(rx.next)!;
+        rx.early.delete(rx.next);
+        rx.earlyBytes -= buf.byteLength;
+        rx.group.push(buf);
+        rx.grouped += buf.byteLength;
+        rx.next += buf.byteLength;
+        if (rx.grouped >= GROUP) flush();
+      }
+    };
     ch.onmessage = (e) => {
-      if (over) return;
+      if (over || rx.session !== s) return;
       if (typeof e.data === "string") {
-        if (e.data === "end") step(async () => {
-          if (r.received !== f.size) throw new Error("The file arrived incomplete");
-          f.saved = await r.writer!.close();
+        if (e.data !== "end") return;
+        s.ends++;
+        if (s.ends < s.slots) return;
+        settle();
+        flush();
+        step(async () => {
+          if (rx.next !== f.size || rx.early.size) throw new Error("The file arrived incomplete");
+          f.saved = await rx.writer!.close();
           over = true;
           f.state = "done";
           f.done = f.size;
-          tell("ack:" + r.written);
+          tell("ack:" + rx.written);
           tell("done");
-          this.halts.delete(b.id);
+          files.delete(i);
           this.progress(b);
           this.finished(b);
         });
         return;
       }
       const buf = e.data as ArrayBuffer, len = buf.byteLength;
-      r.received += len;
-      if (r.received > f.size) return fail("More data arrived than was offered");
-      step(async () => {
-        await r.writer!.write(buf);
-        r.written += len;
-        f.done = r.written;
-        if (r.written - lastAck >= ACK_EVERY) { lastAck = r.written; tell("ack:" + r.written); }
-        this.progress(b);
-      });
+      // Where this piece belongs: this slot's p-th byte lies in block (p / BLOCK)·slots + slot.
+      const p = s.pos[slot];
+      if ((p % BLOCK) + len > BLOCK) return fail("The transfer got out of step. Send it again.");
+      const at = start + (Math.floor(p / BLOCK) * slots + slot) * BLOCK + (p % BLOCK);
+      s.pos[slot] += len;
+      if (at + len > f.size) return fail("More data arrived than was offered");
+      rx.early.set(at, buf);
+      rx.earlyBytes += len;
+      if (rx.earlyBytes > WINDOW + BLOCK * MAX_SLOTS) return fail("The transfer got out of step. Send it again.");
+      settle();
     };
-    // The connection went: keep the file open and wait for it to come back.
-    ch.onclose = () => { if (!over && f.state !== "done") { over = true; this.pause(b); } };
+    // A connection went: keep the file open and wait for it to come back.
+    ch.onclose = () => {
+      unhalt();
+      if (!over && f.state !== "done" && rx.session === s) { over = true; this.pause(b); }
+    };
   }
+}
+
+export const MISMATCH = "The other device is running a different version of Lanet. Reload the page on both devices, then try again.";
+
+function join(parts: ArrayBuffer[], size: number): ArrayBuffer {
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const p of parts) { out.set(new Uint8Array(p), at); at += p.byteLength; }
+  return out.buffer;
 }
 
 function sameFiles(a: TFile[], b: TFile[]): boolean {

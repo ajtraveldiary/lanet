@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { Button, DeviceTile, IconTile, Note, Ring } from "./ui";
 import { Icon, fileKind } from "./icons";
-import { MAX_FILES, type Batch, type Caps, type TFile, type Transfers } from "./lib/transfers";
+import { MAX_FILES, MISMATCH, type Batch, type Caps, type TFile, type Transfers } from "./lib/transfers";
 import { formatSize, formatTime } from "./lib/files";
 import { deviceName } from "./lib/device";
 import { canPickFolder, fromDrop, fromInput, type Picked } from "./lib/pick";
@@ -9,7 +9,9 @@ import { MEMORY_LIMIT, canShareFiles, chooseFolder, saveFile, savedFolderName, s
 
 const IOS_WARN = 2 * 1024 ** 3;
 
-export function FilesPanel({ transfers, otherName, canSend }: { transfers: Transfers; otherName: string; canSend: boolean }) {
+export function FilesPanel({ transfers, otherName, canSend: connected }: { transfers: Transfers; otherName: string; canSend: boolean }) {
+  // Two different versions of Lanet can't swap files; text still works.
+  const canSend = connected && !transfers.mismatch;
   const input = useRef<HTMLInputElement>(null);
   const folderInput = useRef<HTMLInputElement>(null);
   const [pending, setPending] = useState<{ files: Picked[]; warning: string } | null>(null);
@@ -64,6 +66,7 @@ export function FilesPanel({ transfers, otherName, canSend }: { transfers: Trans
           </div>
         </div>
       )}
+      {connected && transfers.mismatch && <Note tone="warn">{MISMATCH}</Note>}
       {problem && <Note tone="bad">{problem}</Note>}
       <ReceiveWhere />
       {transfers.batches.length > 0 && (

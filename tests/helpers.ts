@@ -11,17 +11,38 @@ export async function device(browser: Browser, sink?: Sink): Promise<Page> {
   await context.addInitScript((s) => {
     if (s) localStorage.setItem("lanet.sink", s);
     // Remember every data channel the page sends on, so a test can cut them like a dropped Wi-Fi.
-    const w = window as unknown as { __chs: Set<RTCDataChannel>; __drop: () => number };
+    const w = window as unknown as {
+      __chs: Set<RTCDataChannel>; __drop: () => number; __dropLanes: () => number;
+      __maxFiles: number; __maxSlots: number;
+    };
     w.__chs = new Set();
+    // The most files moving at once, and the most connections one file was spread over (sending side).
+    w.__maxFiles = 0;
+    w.__maxSlots = 0;
     const send = RTCDataChannel.prototype.send as (this: RTCDataChannel, data: unknown) => void;
     (RTCDataChannel.prototype as unknown as { send: (this: RTCDataChannel, data: unknown) => void }).send = function (data) {
       w.__chs.add(this);
+      const label = this.label.split(":");
+      if (label[0] === "f" && typeof data !== "string") {
+        const moving = new Set([...w.__chs].filter((c) => c.readyState === "open" && c.label.startsWith("f:")).map((c) => c.label.split(":").slice(1, 3).join(":")));
+        w.__maxFiles = Math.max(w.__maxFiles, moving.size);
+        w.__maxSlots = Math.max(w.__maxSlots, Number(label[5]) || 1);
+      }
       send.call(this, data);
     };
     w.__drop = () => {
       let n = 0;
       for (const c of w.__chs) if (c.readyState === "open") { c.close(); n++; }
       w.__chs.clear();
+      return n;
+    };
+    // Cuts only the file channels on the extra connections (slots 1 and 2), as if one of those dropped.
+    w.__dropLanes = () => {
+      let n = 0;
+      for (const c of w.__chs) {
+        const slot = Number(c.label.split(":")[4]);
+        if (c.readyState === "open" && c.label.startsWith("f:") && slot >= 1) { c.close(); n++; }
+      }
       return n;
     };
   }, sink ?? null);
@@ -170,6 +191,16 @@ export async function sendText(page: Page, text: string) {
 
 // Cuts the direct connection from this page, as a dropped Wi-Fi would.
 export const dropConnection = (page: Page) => page.evaluate(() => (window as unknown as { __drop: () => number }).__drop());
+
+// Cuts only the extra connections' file channels from this page.
+export const dropLanes = (page: Page) => page.evaluate(() => (window as unknown as { __dropLanes: () => number }).__dropLanes());
+
+// On the sending page: the most files that moved at once, and the most connections one file used.
+export const usage = (page: Page) =>
+  page.evaluate(() => {
+    const w = window as unknown as { __maxFiles: number; __maxSlots: number };
+    return { files: w.__maxFiles, slots: w.__maxSlots };
+  });
 
 // Waits until a transfer shows at least this much done.
 export async function waitForPercent(page: Page, name: string, pct: number) {

@@ -57,9 +57,52 @@ export function useGuestRoom(roomId: string) {
     }
   }, []);
 
+  // Two extra connections to the main device, used only to spread big files for speed.
+  const lanesRef = useRef<(PeerLink | null)[]>([null, null, null]);
+  const laneTimers = useRef([0, 0, 0]);
+
+  const closeLanes = useCallback(() => {
+    for (const k of [1, 2]) {
+      clearTimeout(laneTimers.current[k]);
+      lanesRef.current[k]?.close();
+      lanesRef.current[k] = null;
+      transfers.setLane(k, null);
+    }
+  }, [transfers]);
+
+  const startLane = useCallback((k: number) => {
+    clearTimeout(laneTimers.current[k]);
+    lanesRef.current[k]?.close();
+    transfers.setLane(k, null);
+    const lane: PeerLink = new PeerLink({
+      offerer: true,
+      signal: (s: Signal) => {
+        const ws = wsRef.current;
+        if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "signal", data: { ...s, lane: k } }));
+      },
+      onState: (s) => {
+        if (lanesRef.current[k] !== lane) return;
+        transfers.setLane(k, s === "connected" ? lane : null);
+        // One that drops is set up again while the main connection is fine; files just use fewer meanwhile.
+        if (s === "reconnecting") {
+          laneTimers.current[k] = window.setTimeout(() => {
+            if (lanesRef.current[k] === lane && peerRef.current?.state === "connected") startLane(k);
+          }, RESTART_AFTER);
+        }
+      },
+      onChannel: (ch) => {
+        if (lanesRef.current[k] === lane) transfers.channel(ch);
+        else ch.close();
+      },
+      onMessage: () => {},
+    });
+    lanesRef.current[k] = lane;
+  }, [transfers]);
+
   const startPeer = useCallback(() => {
     clearTimeout(restartTimer.current);
     peerRef.current?.close();
+    closeLanes();
     transfers.detach();
     setLink("connecting");
     const peer: PeerLink = new PeerLink({
@@ -70,7 +113,11 @@ export function useGuestRoom(roomId: string) {
       },
       onState: (s) => {
         setLink(s);
-        if (s === "connected" && peerRef.current === peer) transfers.attach(peer);
+        if (s === "connected" && peerRef.current === peer) {
+          transfers.attach(peer);
+          startLane(1);
+          startLane(2);
+        }
         clearTimeout(restartTimer.current);
         if (s === "reconnecting") {
           restartTimer.current = window.setTimeout(() => {
@@ -90,7 +137,7 @@ export function useGuestRoom(roomId: string) {
       },
     });
     peerRef.current = peer;
-  }, [transfers]);
+  }, [transfers, closeLanes, startLane]);
 
   useEffect(() => {
     let stopped = false, tries = 0, timer = 0;
@@ -123,7 +170,9 @@ export function useGuestRoom(roomId: string) {
           setTriesLeft(typeof m.left === "number" ? m.left : null);
           setPhase("pin");
         } else if (m.type === "signal" && m.data && typeof m.data === "object") {
-          if (m.data.restart) startPeer();
+          const lane = Number(m.data.lane) || 0;
+          if (lane === 1 || lane === 2) lanesRef.current[lane]?.handle(m.data as Signal);
+          else if (m.data.restart) startPeer();
           else peerRef.current?.handle(m.data as Signal);
         } else if (m.type === "hostAway") {
           setHostAway(true);
@@ -142,6 +191,7 @@ export function useGuestRoom(roomId: string) {
         if (final) {
           writeSession(keyFor(roomId), null);
           peerRef.current?.close();
+          closeLanes();
           transfers.end("The room closed");
           setWasIn(phaseRef.current === "in");
           setMessage(final);
@@ -163,8 +213,9 @@ export function useGuestRoom(roomId: string) {
       wsRef.current = null;
       peerRef.current?.close();
       peerRef.current = null;
+      closeLanes();
     };
-  }, [roomId, join, setPhase, setHostAway, startPeer, transfers]);
+  }, [roomId, join, setPhase, setHostAway, startPeer, transfers, closeLanes]);
 
   const submitPin = useCallback((pin: string) => {
     pinRef.current = pin;
