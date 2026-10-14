@@ -37,7 +37,9 @@ function Home({ starting, ended, onStart }: { starting: boolean; ended: string |
           Same Wi-Fi · straight from device to device
         </span>
         <div>
-          <h1 className="mb-2 text-3xl font-bold tracking-tight sm:text-4xl">Share files on your Wi-Fi</h1>
+          <h1 className="mb-2 text-3xl font-bold tracking-tight sm:text-4xl">
+            Share files on your <span className="whitespace-nowrap">Wi-Fi</span>
+          </h1>
           <p className="max-w-prose text-muted">
             Start a room on this device. Other devices on the same Wi-Fi join with a link and a PIN, then send files,
             folders and text straight to this device. Nothing goes through the internet.
